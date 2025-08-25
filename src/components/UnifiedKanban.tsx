@@ -47,6 +47,13 @@ const STORAGE_OPTIONS = [
   "台車（パレットに置き場所がない場合）",
 ];
 
+// ラベル幅: 長いラベル用（味付け種類 など）
+const LABEL_WIDTH_LONG = "w-[6.5rem]";
+// 2文字ラベル用（魚種/産地/数量/商品）
+const LABEL_WIDTH_COMPACT = "w-[3.5rem]";
+// 2文字ラベルの判定セット
+const COMPACT_LABELS = new Set(["魚種", "産地", "数量", "商品"]);
+
 // ===== Kanban 用ステータス（UI表示） =====
 const K_STATUSES = [
   { id: "manufactured", label: "製造済み", hint: "未処理（梱包前）" },
@@ -775,21 +782,25 @@ function KanbanCard({
           </span>
         )}
       </div>
-      <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
+      {/* 情報行：2カラム混在（ご要望版） */}
+      <div className="space-y-2 text-sm">
+        {/* 1行目：味付け種類（フル幅） */}
         <Field k="味付け種類" v={item.seasoningType || "-"} />
-        <Field k="魚種" v={item.fishType || "-"} />
-        <Field k="産地" v={item.origin || "-"} />
-        <Field k="数量" v={`${item.quantity} 個`} />
-        {columnId === "stock" ? (
-          <>
-            <Field k="製造商品" v={item.manufactureProduct || "-"} />
-            <Field k="保管場所" v={item.packingInfo.location || "-"} />
-          </>
-        ) : (
-          <div className="col-span-2">
-            <Field k="製造商品" v={item.manufactureProduct || "-"} />
-          </div>
-        )}
+
+        {/* 2行目：魚種 / 産地 */}
+        <div className="grid grid-cols-2 gap-3">
+          <Field k="魚種" v={item.fishType || "-"} />
+          <Field k="産地" v={item.origin || "-"} />
+        </div>
+
+        {/* 3行目：数量 / 商品 */}
+        <div className="grid grid-cols-2 gap-3">
+          <Field k="数量" v={`${item.quantity} 個`} />
+          <Field k="商品" v={item.manufactureProduct || "-"} />
+        </div>
+
+        {/* 4行目：保管場所（在庫列のみ） */}
+        {columnId === "stock" && <Field k="保管場所" v={item.packingInfo.location || "-"} />}
       </div>
 
       {/* アクション */}
@@ -813,12 +824,15 @@ function KanbanCard({
 }
 
 function Field({ k, v }: { k: string; v: React.ReactNode }) {
+  const widthClass = COMPACT_LABELS.has(k) ? LABEL_WIDTH_COMPACT : LABEL_WIDTH_LONG;
   return (
-    <div className="grid grid-cols-[auto,1fr] items-center gap-x-2 pb-1">
-      <span className="inline-flex h-6 items-center px-2 rounded bg-gray-600 text-white text-xs font-bold whitespace-nowrap">
+    <div className="flex flex-col">
+      <span
+        className={`inline-flex h-6 items-center px-2 rounded bg-gray-600 text-white text-xs font-bold mb-1 ${widthClass}`}
+      >
         {k}
       </span>
-      <span className="font-bold text-gray-900 text-right truncate">{v}</span>
+      <span className="font-bold text-gray-900 text-left break-words leading-tight">{v}</span>
     </div>
   );
 }
