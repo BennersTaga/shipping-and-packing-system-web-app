@@ -775,21 +775,25 @@ function KanbanCard({
           </span>
         )}
       </div>
-      <div className="grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
+      {/* 情報行：2カラム混在（ご要望版） */}
+      <div className="space-y-2 text-sm">
+        {/* 1行目：味付け種類（フル幅） */}
         <Field k="味付け種類" v={item.seasoningType || "-"} />
-        <Field k="魚種" v={item.fishType || "-"} />
-        <Field k="産地" v={item.origin || "-"} />
-        <Field k="数量" v={`${item.quantity} 個`} />
-        {columnId === "stock" ? (
-          <>
-            <Field k="製造商品" v={item.manufactureProduct || "-"} />
-            <Field k="保管場所" v={item.packingInfo.location || "-"} />
-          </>
-        ) : (
-          <div className="col-span-2">
-            <Field k="製造商品" v={item.manufactureProduct || "-"} />
-          </div>
-        )}
+
+        {/* 2行目：魚種 / 産地 */}
+        <div className="grid grid-cols-2 gap-3">
+          <Field k="魚種" v={item.fishType || "-"} />
+          <Field k="産地" v={item.origin || "-"} />
+        </div>
+
+        {/* 3行目：数量 / 製造商品 */}
+        <div className="grid grid-cols-2 gap-3">
+          <Field k="数量" v={`${item.quantity} 個`} />
+          <Field k="製造商品" v={item.manufactureProduct || "-"} />
+        </div>
+
+        {/* 4行目：保管場所（在庫列のみ） */}
+        {columnId === "stock" && <Field k="保管場所" v={item.packingInfo.location || "-"} />}
       </div>
 
       {/* アクション */}
@@ -815,7 +819,7 @@ function KanbanCard({
 function Field({ k, v }: { k: string; v: React.ReactNode }) {
   return (
     <div className="grid grid-cols-[auto,1fr] items-center gap-x-2 pb-1">
-      <span className="inline-flex h-6 items-center px-2 rounded bg-gray-600 text-white text-xs font-bold whitespace-nowrap">
+      <span className="inline-flex h-6 w-24 items-center px-2 rounded bg-gray-600 text-white text-xs font-bold whitespace-nowrap">
         {k}
       </span>
       <span className="font-bold text-gray-900 text-right truncate">{v}</span>
