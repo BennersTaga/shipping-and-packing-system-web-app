@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { SHEET_LOG_NAME } from "../constants";
+import { generateRequestId } from "../utils/requestId";
 // Unified Kanban UI – 梱包/出荷/在庫 の表側プロトタイプ
 // v2.20  
 // - カード情報を縦並びにレイアウト（長い文字列でも途中で切れにくい）
@@ -35,7 +37,7 @@ const API_ENDPOINTS = {
   SEARCH_PACKING: "/api/packing/search",
   UPDATE_PACKING: "/api/packing/update",
 };
-const SHEET_LOG_NAME = "梱包&出荷";
+
 const STORAGE_OPTIONS = [
   "パレット①",
   "パレット②",
@@ -320,26 +322,7 @@ export default function UnifiedKanbanPrototypeV2() {
           setColumns((prev) => ({ ...prev, stock: [...prev.stock, newId] }));
         }
         closeDialog();
-        // ログ送信（必須：from/to/quantity + requestId）
-        try {
-          await fetch(API_ENDPOINTS.UPDATE_PACKING, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "X-Request-Id": rid },
-            body: JSON.stringify({
-              action: "move",
-              rowIndex: item.rowIndex,
-              requestId: rid,
-              payload: { from: item.packingInfo.location, to, quantity: movedQty },
-              log: {
-                sheet: SHEET_LOG_NAME,
-                when: filters.date || today,
-                type: "移動",
-                fromLocation: item.packingInfo.location,
-                toLocation: to,
-                location: to,
-                quantity: movedQty,
-              },
-            }),
+
           });
         } catch {}
       },
@@ -364,26 +347,7 @@ export default function UnifiedKanbanPrototypeV2() {
       shipped: prev.shipped.filter((id) => id !== before),
       stock: prev.stock.includes(after) ? prev.stock : [...prev.stock, after],
     }));
-    // 復帰ログ（restore）
-    try {
-      const rid = genRequestId();
-      await fetch(API_ENDPOINTS.UPDATE_PACKING, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Request-Id": rid },
-        body: JSON.stringify({
-          action: "restore",
-          rowIndex: item.rowIndex,
-          requestId: rid,
-          payload: { to: loc, quantity: q },
-          log: {
-            sheet: SHEET_LOG_NAME,
-            when: filters.date || today,
-            type: "復帰",
-            toLocation: loc,
-            location: loc,
-            quantity: q,
-          },
-        }),
+
       });
     } catch {}
   }
@@ -392,6 +356,7 @@ export default function UnifiedKanbanPrototypeV2() {
     // ダイアログで入力させる
     setRestoreTarget(a);
   }
+
 
   async function doRestoreFromArchive(a: ArchiveItem, payload: { location?: string; quantity?: number }) {
     const loc = (payload.location || "").trim();
@@ -427,23 +392,7 @@ export default function UnifiedKanbanPrototypeV2() {
       setCards((prev) => ({ ...prev, [existingId]: updated }));
       setColumns((prev) => ({ ...prev, shipped: prev.shipped.filter((id) => (cards[id]?.rowIndex ?? -1) !== a.base.rowIndex) }));
       try {
-        await fetch(API_ENDPOINTS.UPDATE_PACKING, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Request-Id": rid },
-          body: JSON.stringify({
-            action: "restore",
-            rowIndex: a.base.rowIndex,
-            requestId: rid,
-            payload: { to: loc, quantity: qty },
-            log: {
-              sheet: SHEET_LOG_NAME,
-              when: filters.date || today,
-              type: "復帰",
-              toLocation: loc,
-              location: loc,
-              quantity: qty,
-            },
-          }),
+
         });
       } catch {}
       finish(existingId);
@@ -460,23 +409,7 @@ export default function UnifiedKanbanPrototypeV2() {
       return { ...prev, shipped: shippedIds, stock: nextStock };
     });
     try {
-      await fetch(API_ENDPOINTS.UPDATE_PACKING, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Request-Id": rid },
-        body: JSON.stringify({
-          action: "restore",
-          rowIndex: a.base.rowIndex,
-          requestId: rid,
-          payload: { to: loc, quantity: qty },
-          log: {
-            sheet: SHEET_LOG_NAME,
-            when: filters.date || today,
-            type: "復帰",
-            toLocation: loc,
-            location: loc,
-            quantity: qty,
-          },
-        }),
+
       });
     } catch {}
     finish(newId);
@@ -517,24 +450,7 @@ export default function UnifiedKanbanPrototypeV2() {
         moveCardEx(beforeId, "manufactured", "stock", afterId);
       }
 
-      // GAS 側へログ付きで送信（requestId + ヘッダ付与）
-      try {
-        await fetch(API_ENDPOINTS.UPDATE_PACKING, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Request-Id": rid },
-          body: JSON.stringify({
-            action: "pack",
-            rowIndex: item.rowIndex,
-            requestId: rid,
-            packingData: { location: loc, quantity: String(qty) },
-            log: {
-              sheet: SHEET_LOG_NAME,
-              when: filters.date || today,
-              type: "梱包",
-              location: loc,
-              quantity: qty,
-            },
-          }),
+
         });
       } catch {}
     } finally {
@@ -560,23 +476,7 @@ export default function UnifiedKanbanPrototypeV2() {
       const rid = genRequestId();
 
       try {
-        await fetch(API_ENDPOINTS.UPDATE_PACKING, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Request-Id": rid },
-          body: JSON.stringify({
-            action: "ship",
-            rowIndex: item.rowIndex,
-            requestId: rid,
-            packingData: { location: loc, quantity: String(qty) },
-            log: {
-              sheet: SHEET_LOG_NAME,
-              when: filters.date || today,
-              type: "出荷",
-              shipType,
-              location: loc,
-              quantity: qty,
-            },
-          }),
+
         });
       } catch {}
 
