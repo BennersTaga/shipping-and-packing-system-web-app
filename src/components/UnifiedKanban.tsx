@@ -38,7 +38,6 @@ const API_ENDPOINTS = {
   UPDATE_PACKING: "/api/packing/update",
 };
 
-
 const STORAGE_OPTIONS = [
   "パレット①",
   "パレット②",
@@ -301,6 +300,8 @@ export default function UnifiedKanbanPrototypeV2() {
         if (!to) return;
         const cur = Math.max(0, parseInt(item.packingInfo.quantity || "0", 10) || 0);
         const { remain, move } = computeSplit(cur, p.quantity || cur);
+        const movedQty = Math.max(1, Math.min(p.quantity || cur, cur));
+        const rid = genRequestId();
         if (move === cur) {
           // 全量移動（IDも更新）
           const { beforeId, afterId, updated } = computeAfterMove(item, to);
@@ -321,18 +322,7 @@ export default function UnifiedKanbanPrototypeV2() {
           setColumns((prev) => ({ ...prev, stock: [...prev.stock, newId] }));
         }
         closeDialog();
-        try {
-          await postUpdate({
-            action: "move",
-            rowIndex: item.rowIndex,
-            payload: { to, quantity: p.quantity },
-            log: {
-              sheet: SHEET_LOG_NAME,
-              when: filters.date || today,
-              type: "移動",
-              location: to,
-              quantity: move,
-            },
+
           });
         } catch {}
       },
@@ -357,18 +347,7 @@ export default function UnifiedKanbanPrototypeV2() {
       shipped: prev.shipped.filter((id) => id !== before),
       stock: prev.stock.includes(after) ? prev.stock : [...prev.stock, after],
     }));
-    try {
-      await postUpdate({
-        action: "restore",
-        rowIndex: item.rowIndex,
-        payload: { to: loc, quantity: q },
-        log: {
-          sheet: SHEET_LOG_NAME,
-          when: filters.date || today,
-          type: "復帰",
-          location: loc,
-          quantity: q,
-        },
+
       });
     } catch {}
   }
@@ -378,30 +357,12 @@ export default function UnifiedKanbanPrototypeV2() {
     setRestoreTarget(a);
   }
 
-  async function postUpdate(body: any) {
-    const requestId = generateRequestId();
-    try {
-      const res = await fetch(API_ENDPOINTS.UPDATE_PACKING, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Request-Id": requestId },
-        body: JSON.stringify({ ...body, requestId }),
-      });
-      const ct = res.headers.get("content-type") || "";
-      const data = ct.includes("application/json") ? await res.json() : await res.text();
-      if (!res.ok || (typeof data === "object" && data && data.success === false)) {
-        throw new Error(typeof data === "string" ? data : data?.error || `status ${res.status}`);
-      }
-      return data;
-    } catch (e) {
-      setBannerError("APIエラー");
-      throw e;
-    }
-  }
 
   async function doRestoreFromArchive(a: ArchiveItem, payload: { location?: string; quantity?: number }) {
     const loc = (payload.location || "").trim();
     if (!loc) return;
     const qty = Math.max(1, Math.min(a.ship.quantity, payload.quantity || a.ship.quantity));
+    const rid = genRequestId();
 
     // 後処理（ドロワーを閉じ、対象カードへスクロール＆一時ハイライト）
     const finish = (targetId: string) => {
@@ -431,17 +392,7 @@ export default function UnifiedKanbanPrototypeV2() {
       setCards((prev) => ({ ...prev, [existingId]: updated }));
       setColumns((prev) => ({ ...prev, shipped: prev.shipped.filter((id) => (cards[id]?.rowIndex ?? -1) !== a.base.rowIndex) }));
       try {
-        await postUpdate({
-          action: "restore",
-          rowIndex: a.base.rowIndex,
-          payload: { to: loc, quantity: qty },
-          log: {
-            sheet: SHEET_LOG_NAME,
-            when: filters.date || today,
-            type: "復帰",
-            location: loc,
-            quantity: qty,
-          },
+
         });
       } catch {}
       finish(existingId);
@@ -458,17 +409,7 @@ export default function UnifiedKanbanPrototypeV2() {
       return { ...prev, shipped: shippedIds, stock: nextStock };
     });
     try {
-      await postUpdate({
-        action: "restore",
-        rowIndex: a.base.rowIndex,
-        payload: { to: loc, quantity: qty },
-        log: {
-          sheet: SHEET_LOG_NAME,
-          when: filters.date || today,
-          type: "復帰",
-          location: loc,
-          quantity: qty,
-        },
+
       });
     } catch {}
     finish(newId);
@@ -483,6 +424,7 @@ export default function UnifiedKanbanPrototypeV2() {
     try {
       const loc = (payload.location || "").trim();
       const qty = Math.max(1, payload.quantity || item.quantity);
+      const rid = genRequestId();
 
       // 既存在庫（同 rowIndex & 同ロケーション）にマージ
       const existingId = Object.keys(cards).find((id) => columns.stock.includes(id) && cards[id]?.rowIndex === item.rowIndex && (cards[id]?.packingInfo.location || "") === loc);
@@ -508,18 +450,7 @@ export default function UnifiedKanbanPrototypeV2() {
         moveCardEx(beforeId, "manufactured", "stock", afterId);
       }
 
-      try {
-        await postUpdate({
-          action: "pack",
-          rowIndex: item.rowIndex,
-          packingData: { location: loc, quantity: String(qty) },
-          log: {
-            sheet: SHEET_LOG_NAME,
-            when: filters.date || today,
-            type: "梱包",
-            location: loc,
-            quantity: qty,
-          },
+
         });
       } catch {}
     } finally {
@@ -542,20 +473,10 @@ export default function UnifiedKanbanPrototypeV2() {
       const maxFromStock = Math.max(1, Number(item.packingInfo.quantity) || item.quantity);
       const reqQty = payload.quantity || (from === "manufactured" ? maxFromManufactured : maxFromStock);
       const qty = Math.max(1, Math.min(reqQty, from === "manufactured" ? maxFromManufactured : maxFromStock));
+      const rid = genRequestId();
 
       try {
-        await postUpdate({
-          action: "ship",
-          rowIndex: item.rowIndex,
-          packingData: { location: loc, quantity: String(qty) },
-          log: {
-            sheet: SHEET_LOG_NAME,
-            when: filters.date || today,
-            type: "出荷",
-            shipType,
-            location: loc,
-            quantity: qty,
-          },
+
         });
       } catch {}
 
@@ -600,6 +521,14 @@ export default function UnifiedKanbanPrototypeV2() {
   }
 
   // ==== ユーティリティ ====
+  function genRequestId() {
+    try {
+      const v = (globalThis as any)?.crypto?.randomUUID?.();
+      return v || Math.random().toString(36).slice(2);
+    } catch {
+      return Math.random().toString(36).slice(2);
+    }
+  }
   function moveCardEx(oldId: string, from: KanbanStatusId, to: KanbanStatusId, newId?: string) {
     setColumns((prev) => {
       const src = prev[from].filter((id) => id !== oldId);
