@@ -15,6 +15,7 @@ import React, { useEffect, useMemo, useState, useRef } from "react";
 // - 出荷アーカイブ → 在庫へ戻す をUIダイアログで確実に反映（在庫列へ追加/加算 + 自動スクロール & ハイライト）
 // - 在庫→一部出荷／在庫移動を維持
 
+
 // ===== 型 =====
 export type PackingItem = {
   rowIndex: number;
@@ -367,16 +368,26 @@ export default function UnifiedKanbanPrototypeV2() {
     const qty = Math.max(1, payload.quantity || item.quantity);
     try {
       try {
-        await fetch(API_ENDPOINTS.UPDATE_PACKING, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "pack",
-            rowIndex: item.rowIndex,
-            packingData: { location: loc, quantity: String(qty) },
-            log: { sheet: "梱包・出荷", when: filters.date || today, type: "梱包", location: loc, quantity: qty },
-          }),
-        });
+const rid = makeRequestId();
+await fetch(API_ENDPOINTS.UPDATE_PACKING, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    action: "pack",
+    requestId: rid,
+    rowIndex: item.rowIndex,
+    packingData: { location: loc, quantity: String(qty) },
+    log: {
+      requestId: rid,
+      sheet: SHEET_LOG_NAME,
+      when: filters.date || today,
+      type: "梱包",
+      location: loc,
+      quantity: qty,
+    },
+  }),
+});
+
       } catch {}
 
       const existingId = Object.keys(cards).find(
