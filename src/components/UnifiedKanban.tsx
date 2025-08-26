@@ -537,7 +537,7 @@ export default function UnifiedKanbanPrototypeV2() {
   }, [today]);
 
   // ==== レイアウト ====
-  const headerTitle = "梱包・出荷 一体型ボード（試作 v2.20）";
+  const headerTitle = "梱包&出荷 一体型ボード（試作 v2.20）";
   const currentDialog = dialog;
   const currentItem = dialog.item as PackingItem | undefined;
   const origin = dialog.origin as KanbanStatusId | undefined;
