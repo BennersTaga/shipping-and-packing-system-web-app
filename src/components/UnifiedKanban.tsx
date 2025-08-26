@@ -1,20 +1,10 @@
-'use client';
-
-// 上の定数群の近くに追加
-const SHEET_LOG_NAME = "梱包&出荷";
-const makeRequestId = () =>
-  (globalThis.crypto && "randomUUID" in globalThis.crypto)
-    ? globalThis.crypto.randomUUID()
-    : `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-
-
-import React, { useEffect, useMemo, useState, useRef } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 // Unified Kanban UI – 梱包/出荷/在庫 の表側プロトタイプ
-// v2.16  (Client Component 指定)
-// - SyntaxError: Unexpected token の根本原因を修正（メイン関数のreturn/クロージャ欠落 & buildMockData の末尾カッコ）
-// - 出荷アーカイブ → 在庫へ戻す をUIダイアログで確実に反映（在庫列へ追加/加算 + 自動スクロール & ハイライト）
-// - 在庫→一部出荷／在庫移動を維持
-
+// v2.20  
+// - カード情報を縦並びにレイアウト（長い文字列でも途中で切れにくい）
+// - 操作ダイアログのボタンを一回しか押せないように（多重送信ガード）
+// - 梱包時の重複カードを自動マージ（同 rowIndex & 同ロケーション は加算更新）
+// - GAS 側にログを残すため action/metadata を update API に送信
 
 // ===== 型 =====
 export type PackingItem = {
@@ -44,6 +34,8 @@ const API_ENDPOINTS = {
   UPDATE_PACKING: "/api/packing/update",
 };
 
+const SHEET_LOG_NAME = "梱包&出荷";
+
 const STORAGE_OPTIONS = [
   "パレット①",
   "パレット②",
@@ -56,12 +48,9 @@ const STORAGE_OPTIONS = [
   "台車（パレットに置き場所がない場合）",
 ];
 
-// ラベル幅: 長いラベル用（味付け種類 など）
-const LABEL_WIDTH_LONG = "w-[6.5rem]";
-// 2文字ラベル用（魚種/産地/数量/商品）
-const LABEL_WIDTH_COMPACT = "w-[3.5rem]";
-// 2文字ラベルの判定セット
-const COMPACT_LABELS = new Set(["魚種", "産地", "数量", "商品"]);
+// ラベル（灰色ボックス）の横幅を統一：味付け種類に合わせた目安
+// ※必要なら数値を微調整してください（Tailwind 任意値）
+const LABEL_WIDTH = "w-[6.5rem]";
 
 // ===== Kanban 用ステータス（UI表示） =====
 const K_STATUSES = [
@@ -103,6 +92,7 @@ export function computeSplit(originalQty: number, moveQty: number) {
 // ===== メイン =====
 export default function UnifiedKanbanPrototypeV2() {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
+  const inflightRef = useRef<Set<string>>(new Set()); // 多重送信ガード
 
   const [filters, setFilters] = useState<Filters>({
     date: today,
@@ -130,8 +120,6 @@ export default function UnifiedKanbanPrototypeV2() {
   const [archiveQuery, setArchiveQuery] = useState("");
   const [restoreTarget, setRestoreTarget] = useState<ArchiveItem | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
-
-  const inflightRef = useRef<Set<string>>(new Set());
 
   // ==== データ取得 ====
   async function fetchData(override?: Partial<Filters>) {
@@ -231,10 +219,10 @@ export default function UnifiedKanbanPrototypeV2() {
     mode: "pack" | "ship" | "move" | null;
     origin?: KanbanStatusId;
     item?: PackingItem | null;
-    onSubmit?: (p: { location?: string; quantity?: number; shipType?: ShipType }) => void;
+    onSubmit?: (p: { location?: string; quantity?: number; shipType?: ShipType }) => Promise<void> | void;
   }>({ mode: null });
 
-  function openDialog(d: { mode: "pack" | "ship" | "move"; origin?: KanbanStatusId; item: PackingItem; onSubmit: (p: { location?: string; quantity?: number; shipType?: ShipType }) => void }) {
+  function openDialog(d: { mode: "pack" | "ship" | "move"; origin?: KanbanStatusId; item: PackingItem; onSubmit: (p: { location?: string; quantity?: number; shipType?: ShipType }) => Promise<void> | void }) {
     setDialog(d);
   }
   function closeDialog() {
@@ -256,7 +244,7 @@ export default function UnifiedKanbanPrototypeV2() {
       mode: "move",
       item,
       origin,
-      onSubmit: (p) => {
+      onSubmit: async (p) => {
         const to = (p.location || "").trim();
         if (!to) return;
         const cur = Math.max(0, parseInt(item.packingInfo.quantity || "0", 10) || 0);
@@ -281,6 +269,14 @@ export default function UnifiedKanbanPrototypeV2() {
           setColumns((prev) => ({ ...prev, stock: [...prev.stock, newId] }));
         }
         closeDialog();
+        // ログ送信（任意）
+        try {
+          await fetch(API_ENDPOINTS.UPDATE_PACKING, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "move", rowIndex: item.rowIndex, payload: { to, quantity: p.quantity } }),
+          });
+        } catch {}
       },
     });
   }
@@ -361,60 +357,27 @@ export default function UnifiedKanbanPrototypeV2() {
   // ==== 操作実装（サーバ更新は仮） ====
   async function doPack(item: PackingItem, payload: { location?: string; quantity?: number }) {
     const key = `${item.rowIndex}:pack`;
-    if (inflightRef.current.has(key)) return;
+    if (inflightRef.current.has(key)) return; // 連打ガード
     inflightRef.current.add(key);
-    const beforeId = makeId(item);
-    const loc = (payload.location || "").trim();
-    const qty = Math.max(1, payload.quantity || item.quantity);
+
     try {
-      try {
-const rid = makeRequestId();
-await fetch(API_ENDPOINTS.UPDATE_PACKING, {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    action: "pack",
-    requestId: rid,
-    rowIndex: item.rowIndex,
-    packingData: { location: loc, quantity: String(qty) },
-    log: {
-      requestId: rid,
-      sheet: SHEET_LOG_NAME,
-      when: filters.date || today,
-      type: "梱包",
-      location: loc,
-      quantity: qty,
-    },
-  }),
-});
+      const loc = (payload.location || "").trim();
+      const qty = Math.max(1, payload.quantity || item.quantity);
 
-      } catch {}
+      // 既存在庫（同 rowIndex & 同ロケーション）にマージ
+      const existingId = Object.keys(cards).find((id) => columns.stock.includes(id) && cards[id]?.rowIndex === item.rowIndex && (cards[id]?.packingInfo.location || "") === loc);
 
-      const existingId = Object.keys(cards).find(
-        (id) =>
-          columns.stock.includes(id) &&
-          cards[id]?.rowIndex === item.rowIndex &&
-          (cards[id]?.packingInfo.location || "") === loc
-      );
       if (existingId) {
-        setCards((prev) => {
-          const n = { ...prev };
-          const exist = n[existingId];
-          const cur = Math.max(0, Number(exist.packingInfo.quantity) || 0);
-          n[existingId] = {
-            ...exist,
-            packingInfo: { ...exist.packingInfo, quantity: String(cur + qty) },
-          };
-          delete n[beforeId];
-          return n;
-        });
-        setColumns((prev) => ({ ...prev, manufactured: prev.manufactured.filter((id) => id !== beforeId) }));
+        const cur = Math.max(0, parseInt(cards[existingId].packingInfo.quantity || "0", 10) || 0);
+        const nextQty = cur + qty;
+        setCards((prev) => ({ ...prev, [existingId]: { ...prev[existingId], status: "完了", packingInfo: { ...prev[existingId].packingInfo, location: loc, quantity: String(nextQty) } } }));
+        // 製造列から元カードを除去
+        const beforeId = makeId(item);
+        setColumns((prev) => ({ ...prev, manufactured: prev.manufactured.filter((id) => id !== beforeId), stock: prev.stock }));
       } else {
-        const updated: PackingItem = {
-          ...item,
-          packingInfo: { ...item.packingInfo, location: loc, quantity: String(qty) },
-          status: "完了",
-        };
+        // 通常の在庫化
+        const beforeId = makeId(item);
+        const updated: PackingItem = { ...item, packingInfo: { ...item.packingInfo, location: loc, quantity: String(qty) }, status: "完了" };
         const afterId = makeId(updated);
         setCards((prev) => {
           const n = { ...prev };
@@ -424,9 +387,29 @@ await fetch(API_ENDPOINTS.UPDATE_PACKING, {
         });
         moveCardEx(beforeId, "manufactured", "stock", afterId);
       }
-      closeDialog();
+
+      // GAS 側へログ付きで送信
+      try {
+        await fetch(API_ENDPOINTS.UPDATE_PACKING, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "pack",
+            rowIndex: item.rowIndex,
+            packingData: { location: loc, quantity: String(qty) },
+            log: {
+              sheet: SHEET_LOG_NAME,
+              when: filters.date || today,
+              type: "梱包",
+              location: loc,
+              quantity: qty,
+            },
+          }),
+        });
+      } catch {}
     } finally {
       inflightRef.current.delete(key);
+      closeDialog();
     }
   }
 
@@ -434,6 +417,7 @@ await fetch(API_ENDPOINTS.UPDATE_PACKING, {
     const key = `${item.rowIndex}:ship`;
     if (inflightRef.current.has(key)) return;
     inflightRef.current.add(key);
+
     try {
       const from = findColumnOf(makeId(item), columns);
       const shipType: ShipType = (payload.shipType as ShipType) || "ロジカム出荷";
@@ -448,7 +432,19 @@ await fetch(API_ENDPOINTS.UPDATE_PACKING, {
         await fetch(API_ENDPOINTS.UPDATE_PACKING, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ rowIndex: item.rowIndex, packingData: { location: loc, quantity: String(qty) } }),
+          body: JSON.stringify({
+            action: "ship",
+            rowIndex: item.rowIndex,
+            packingData: { location: loc, quantity: String(qty) },
+            log: {
+              sheet: SHEET_LOG_NAME,
+              when: filters.date || today,
+              type: "出荷",
+              shipType,
+              location: loc,
+              quantity: qty,
+            },
+          }),
         });
       } catch {}
 
@@ -541,7 +537,7 @@ await fetch(API_ENDPOINTS.UPDATE_PACKING, {
   }, [today]);
 
   // ==== レイアウト ====
-  const headerTitle = "梱包・出荷 一体型ボード（試作 v2.16）";
+  const headerTitle = "梱包・出荷 一体型ボード（試作 v2.20）";
   const currentDialog = dialog;
   const currentItem = dialog.item as PackingItem | undefined;
   const origin = dialog.origin as KanbanStatusId | undefined;
@@ -709,7 +705,7 @@ await fetch(API_ENDPOINTS.UPDATE_PACKING, {
               locationOptions={STORAGE_OPTIONS}
               shipTypeOptions={["ロジカム出荷", "羽野出荷"]}
               onCancel={() => setRestoreTarget(null)}
-              onSubmit={(p) => {
+              onSubmit={async (p) => {
                 doRestoreFromArchive(restoreTarget, p);
                 setRestoreTarget(null);
               }}
@@ -848,6 +844,7 @@ function KanbanCard({
           </span>
         )}
       </div>
+
       {/* 情報行：2カラム混在（ご要望版） */}
       <div className="space-y-2 text-sm">
         {/* 1行目：味付け種類（フル幅） */}
@@ -859,10 +856,10 @@ function KanbanCard({
           <Field k="産地" v={item.origin || "-"} />
         </div>
 
-        {/* 3行目：数量 / 商品 */}
+        {/* 3行目：数量 / 製造商品 */}
         <div className="grid grid-cols-2 gap-3">
           <Field k="数量" v={`${item.quantity} 個`} />
-          <Field k="商品" v={item.manufactureProduct || "-"} />
+          <Field k="製造商品" v={item.manufactureProduct || "-"} />
         </div>
 
         {/* 4行目：保管場所（在庫列のみ） */}
@@ -890,15 +887,12 @@ function KanbanCard({
 }
 
 function Field({ k, v }: { k: string; v: React.ReactNode }) {
-  const widthClass = COMPACT_LABELS.has(k) ? LABEL_WIDTH_COMPACT : LABEL_WIDTH_LONG;
   return (
     <div className="flex flex-col">
-      <span
-        className={`inline-flex h-6 items-center px-2 rounded bg-gray-600 text-white text-xs font-bold mb-1 ${widthClass}`}
-      >
+      <span className={`inline-flex h-6 items-center px-2 rounded bg-gray-600 text-white text-xs font-bold mb-1 ${LABEL_WIDTH}`}>
         {k}
       </span>
-      <span className="font-bold text-gray-900 text-left break-words leading-tight">{v}</span>
+      <span className="font-bold text-gray-900 break-words leading-tight">{v}</span>
     </div>
   );
 }
@@ -945,7 +939,7 @@ function ActionForm({
   origin?: KanbanStatusId;
   defaultLocation?: string;
   maxQuantity: number;
-  onSubmit: (p: { location?: string; quantity?: number; shipType?: ShipType }) => void;
+  onSubmit: (p: { location?: string; quantity?: number; shipType?: ShipType }) => Promise<void> | void;
   onCancel: () => void;
   showLocation: boolean;
   showQuantity: boolean;
@@ -958,105 +952,92 @@ function ActionForm({
   const [shipType, setShipType] = useState<ShipType>("ロジカム出荷");
   const [submitting, setSubmitting] = useState(false);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (showLocation && !location) return;
-    if (showQuantity && quantity <= 0) return;
-    if (submitting) return;
-    setSubmitting(true);
-    try {
-      await Promise.resolve(
-        onSubmit({
-          location: showLocation ? location : undefined,
-          quantity: showQuantity ? quantity : undefined,
-          shipType,
-        })
-      );
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <fieldset disabled={submitting} className="space-y-4">
-        {showLocation && (
-          <div>
-            <label className="block text-sm font-medium mb-1">{mode === "pack" || mode === "move" ? "保管場所" : "出荷元ロケーション"}</label>
-            {useSelectLocation ? (
-              <select
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
-              >
-                <option value="">選択してください</option>
-                {locationOptions.map((opt) => (
-                  <option key={opt} value={opt}>
-                    {opt}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
-                placeholder="例: パレット①"
-                className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
-              />
-            )}
-          </div>
-        )}
-
-        {showQuantity && (
-          <div>
-            <label className="block text-sm font-medium mb-1">数量（最大 {maxQuantity}）</label>
-            <input
-              type="number"
-              min={1}
-              max={Math.max(1, maxQuantity)}
-              value={quantity}
-              onChange={(e) => setQuantity(Number(e.target.value))}
-              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
-            />
-          </div>
-        )}
-
-        {mode === "ship" && (
-          <div>
-            <label className="block text-sm font-medium mb-1">出荷タイプ</label>
+    <form
+      onSubmit={async (e) => {
+        e.preventDefault();
+        if (submitting) return; // 二重送信防止
+        if (showLocation && !location) return;
+        if (showQuantity && quantity <= 0) return;
+        try {
+          setSubmitting(true);
+          await onSubmit({ location: showLocation ? location : undefined, quantity: showQuantity ? quantity : undefined, shipType });
+        } finally {
+          setSubmitting(false);
+        }
+      }}
+      className="space-y-4"
+    >
+      {showLocation && (
+        <div>
+          <label className="block text-sm font-medium mb-1">{mode === "pack" || mode === "move" ? "保管場所" : "出荷元ロケーション"}</label>
+          {useSelectLocation ? (
             <select
-              value={shipType}
-              onChange={(e) => setShipType(e.target.value as ShipType)}
+              value={location}
+              disabled={submitting}
+              onChange={(e) => setLocation(e.target.value)}
               className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
             >
-              {shipTypeOptions.map((opt) => (
+              <option value="">選択してください</option>
+              {locationOptions.map((opt) => (
                 <option key={opt} value={opt}>
                   {opt}
                 </option>
               ))}
             </select>
-          </div>
-        )}
-
-        <div className="flex gap-2 justify-end pt-2">
-          <button type="button" onClick={onCancel} className="px-4 py-2 rounded-lg border">
-            キャンセル
-          </button>
-          <button
-            type="submit"
-            disabled={submitting}
-            className="px-4 py-2 rounded-lg bg-purple-600 text-white disabled:opacity-60 hover:bg-purple-700"
-          >
-            {submitting
-              ? "処理中..."
-              : mode === "pack"
-              ? "在庫へ移動"
-              : mode === "move"
-              ? "移動する"
-              : "出荷を登録"}
-          </button>
+          ) : (
+            <input
+              value={location}
+              disabled={submitting}
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="例: パレット①"
+              className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+            />
+          )}
         </div>
-      </fieldset>
+      )}
+
+      {showQuantity && (
+        <div>
+          <label className="block text-sm font-medium mb-1">数量（最大 {maxQuantity}）</label>
+          <input
+            type="number"
+            min={1}
+            max={Math.max(1, maxQuantity)}
+            value={quantity}
+            disabled={submitting}
+            onChange={(e) => setQuantity(Number(e.target.value))}
+            className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+          />
+        </div>
+      )}
+
+      {mode === "ship" && (
+        <div>
+          <label className="block text-sm font-medium mb-1">出荷タイプ</label>
+          <select
+            value={shipType}
+            disabled={submitting}
+            onChange={(e) => setShipType(e.target.value as ShipType)}
+            className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+          >
+            {shipTypeOptions.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      <div className="flex gap-2 justify-end pt-2">
+        <button type="button" onClick={onCancel} disabled={submitting} className="px-4 py-2 rounded-lg border">
+          キャンセル
+        </button>
+        <button type="submit" disabled={submitting} className="px-4 py-2 rounded-lg bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-60">
+          {submitting ? "処理中…" : mode === "pack" ? "在庫へ移動" : mode === "move" ? "移動する" : "出荷を登録"}
+        </button>
+      </div>
     </form>
   );
 }
@@ -1108,66 +1089,4 @@ function ArchiveDrawer({
         {list.length === 0 && <div className="text-gray-500 text-sm">出荷履歴はまだありません</div>}
         {list.map((i) => (
           <div key={i.id} className="border rounded-xl p-3 mb-3 bg-gray-50">
-            <div className="flex items-center justify-between text-xs text-gray-600 mb-2">
-              <div>
-                {i.ship.date} ・ 行No.{i.base.rowIndex}
-              </div>
-              <span className="px-2 py-0.5 rounded-full border text-[11px]">{i.ship.type}</span>
-            </div>
-            <div className="grid grid-cols-2 gap-2 text-sm">
-              <Field k="味付け種類" v={i.base.seasoningType} />
-              <Field k="産地" v={i.base.origin} />
-              <Field k="魚種" v={i.base.fishType} />
-              <Field k="出荷数量" v={`${i.ship.quantity} 個`} />
-            </div>
-            <div className="flex justify-end mt-2">
-              <ButtonLine onClick={() => onRestore(i)}>在庫へ戻す</ButtonLine>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ==== モックデータ ====
-function buildMockData(date: string): PackingItem[] {
-  return [
-    {
-      rowIndex: 1645,
-      manufactureDate: date,
-      batchNo: `B-${String(1645).slice(-3)}`,
-      seasoningType: "醤油(生食用)",
-      fishType: "ホウボウ",
-      origin: "福岡",
-      quantity: 200,
-      manufactureProduct: "フィシュル商品",
-      status: "未処理",
-      packingInfo: { location: "", quantity: "0" },
-    },
-    {
-      rowIndex: 1646,
-      manufactureDate: date,
-      batchNo: `B-${String(1646).slice(-3)}`,
-      seasoningType: "醤油(生食用)",
-      fishType: "ホウボウ",
-      origin: "福岡",
-      quantity: 443,
-      manufactureProduct: "フィシュル商品",
-      status: "完了",
-      packingInfo: { location: "パレット②", quantity: "443", user: "A" },
-    },
-    {
-      rowIndex: 1647,
-      manufactureDate: date,
-      batchNo: `B-${String(1647).slice(-3)}`,
-      seasoningType: "にんにく醤油(生食用)",
-      fishType: "ホウボウ",
-      origin: "福岡",
-      quantity: 200,
-      manufactureProduct: "フィシュル商品",
-      status: "完了",
-      packingInfo: { location: "パレット①", quantity: "200", user: "B" },
-    },
-  ];
-}
+            <div className="flex it
