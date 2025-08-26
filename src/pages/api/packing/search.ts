@@ -1,12 +1,26 @@
 // src/pages/api/packing/search.ts
 import type { NextApiRequest, NextApiResponse } from "next";
+import { z } from "zod";
+
+const querySchema = z.object({
+  date: z.string().optional(),
+  product: z.string().optional(),
+  status: z.string().optional(),
+  quantityMin: z.string().optional(),
+  quantityMax: z.string().optional(),
+});
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
+    const parsed = querySchema.safeParse(req.query || {});
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: parsed.error.message });
+    }
+
     const base = process.env.NEXT_PUBLIC_GAS_BASE_URL;
 
     if (!base) {
-      const date = (req.query.date as string) || new Date().toISOString().slice(0,10);
+      const date = parsed.data.date || new Date().toISOString().slice(0,10);
       // モック返却（user は任意）
       return res.status(200).json({
         success: true,
@@ -18,7 +32,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    const qs = new URLSearchParams(req.query as any).toString();
+    const qs = new URLSearchParams(parsed.data as Record<string,string>).toString();
     const r = await fetch(`${base}?action=search&${qs}`, { cache: "no-store" });
     const j = await r.json();
     return res.status(200).json(j);
