@@ -1,5 +1,13 @@
 'use client';
 
+// 上の定数群の近くに追加
+const SHEET_LOG_NAME = "梱包&出荷";
+const makeRequestId = () =>
+  (globalThis.crypto && "randomUUID" in globalThis.crypto)
+    ? globalThis.crypto.randomUUID()
+    : `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+
 import React, { useEffect, useMemo, useState, useRef } from "react";
 // Unified Kanban UI – 梱包/出荷/在庫 の表側プロトタイプ
 // v2.16  (Client Component 指定)
