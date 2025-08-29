@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { SHEET_LOG_NAME } from "../constants";
+import { generateRequestId } from "../utils/requestId";
 // Unified Kanban UI – 梱包/出荷/在庫 の表側プロトタイプ
 // v2.20
 // - カード情報を縦並びにレイアウト（長い文字列でも途中で切れにくい）
@@ -40,8 +42,6 @@ const API_ENDPOINTS = {
   SEARCH_PACKING: "/api/packing/search",
   UPDATE_PACKING: "/api/packing/update",
 };
-
-const SHEET_LOG_NAME = "梱包&出荷";
 
 const STORAGE_OPTIONS = [
   "パレット①",
@@ -114,6 +114,47 @@ export function computeSplit(originalQty: number, moveQty: number) {
   return { remain: o - m, move: m };
 }
 
+function buildMockData(date: string): PackingItem[] {
+  return [
+    {
+      rowIndex: 1645,
+      manufactureDate: date,
+      batchNo: "B-645",
+      seasoningType: "醤油(生食用)",
+      fishType: "ホウボウ",
+      origin: "福岡",
+      quantity: 200,
+      manufactureProduct: "フィシュル商品",
+      status: "未処理",
+      packingInfo: { location: "", quantity: "0" },
+    },
+    {
+      rowIndex: 1646,
+      manufactureDate: date,
+      batchNo: "B-646",
+      seasoningType: "醤油(生食用)",
+      fishType: "ホウボウ",
+      origin: "福岡",
+      quantity: 443,
+      manufactureProduct: "フィシュル商品",
+      status: "完了",
+      packingInfo: { location: "パレット②", quantity: "443", user: "A" },
+    },
+    {
+      rowIndex: 1647,
+      manufactureDate: date,
+      batchNo: "B-647",
+      seasoningType: "にんにく醤油(生食用)",
+      fishType: "ホウボウ",
+      origin: "福岡",
+      quantity: 200,
+      manufactureProduct: "フィシュル商品",
+      status: "完了",
+      packingInfo: { location: "パレット①", quantity: "200", user: "B" },
+    },
+  ];
+}
+
 // ===== メイン =====
 export default function UnifiedKanbanPrototypeV2() {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
@@ -129,6 +170,7 @@ export default function UnifiedKanbanPrototypeV2() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [bannerError, setBannerError] = useState<string | null>(null);
 
   // Kanban の並び（各列に属するカードID）
   const [columns, setColumns] = useState<Record<KanbanStatusId, string[]>>({
@@ -145,6 +187,13 @@ export default function UnifiedKanbanPrototypeV2() {
   const [archiveQuery, setArchiveQuery] = useState("");
   const [restoreTarget, setRestoreTarget] = useState<ArchiveItem | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (bannerError) {
+      const t = setTimeout(() => setBannerError(null), 3000);
+      return () => clearTimeout(t);
+    }
+  }, [bannerError]);
 
   // ==== データ取得 ====
   async function fetchData(override?: Partial<Filters>) {
@@ -342,6 +391,8 @@ export default function UnifiedKanbanPrototypeV2() {
           parseInt(item.packingInfo.quantity || "0", 10) || 0,
         );
         const { remain, move } = computeSplit(cur, p.quantity || cur);
+        const movedQty = Math.max(1, Math.min(p.quantity || cur, cur));
+        const rid = genRequestId();
         if (move === cur) {
           // 全量移動（IDも更新）
           const { beforeId, afterId, updated } = computeAfterMove(item, to);
@@ -394,7 +445,7 @@ export default function UnifiedKanbanPrototypeV2() {
       },
     });
   }
-  function requestRestoreFromShipped(item: PackingItem) {
+  async function requestRestoreFromShipped(item: PackingItem) {
     const qtyStr = prompt("在庫へ戻す数量", "1");
     const q = Math.max(1, parseInt(qtyStr || "0", 10) || 0);
     const loc = prompt("戻す保管場所", item.packingInfo.location || "");
@@ -413,6 +464,9 @@ export default function UnifiedKanbanPrototypeV2() {
       shipped: prev.shipped.filter((id) => id !== before),
       stock: prev.stock.includes(after) ? prev.stock : [...prev.stock, after],
     }));
+
+      });
+    } catch {}
   }
 
   function restoreFromArchive(a: ArchiveItem) {
@@ -495,6 +549,10 @@ export default function UnifiedKanbanPrototypeV2() {
         : [...prev.stock, newId];
       return { ...prev, shipped: shippedIds, stock: nextStock };
     });
+    try {
+
+      });
+    } catch {}
     finish(newId);
   }
 
@@ -510,6 +568,7 @@ export default function UnifiedKanbanPrototypeV2() {
     try {
       const loc = (payload.location || "").trim();
       const qty = Math.max(1, payload.quantity || item.quantity);
+      const rid = genRequestId();
 
       // 既存在庫（同 rowIndex & 同ロケーション）にマージ
       const existingId = Object.keys(cards).find(
@@ -566,23 +625,7 @@ export default function UnifiedKanbanPrototypeV2() {
         moveCardEx(beforeId, "manufactured", "stock", afterId);
       }
 
-      // GAS 側へログ付きで送信
-      try {
-        await fetch(API_ENDPOINTS.UPDATE_PACKING, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "pack",
-            rowIndex: item.rowIndex,
-            packingData: { location: loc, quantity: String(qty) },
-            log: {
-              sheet: SHEET_LOG_NAME,
-              when: filters.date || today,
-              type: "梱包",
-              location: loc,
-              quantity: qty,
-            },
-          }),
+
         });
       } catch {}
     } finally {
@@ -625,22 +668,7 @@ export default function UnifiedKanbanPrototypeV2() {
       );
 
       try {
-        await fetch(API_ENDPOINTS.UPDATE_PACKING, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            action: "ship",
-            rowIndex: item.rowIndex,
-            packingData: { location: loc, quantity: String(qty) },
-            log: {
-              sheet: SHEET_LOG_NAME,
-              when: filters.date || today,
-              type: "出荷",
-              shipType,
-              location: loc,
-              quantity: qty,
-            },
-          }),
+
         });
       } catch {}
 
@@ -796,6 +824,11 @@ export default function UnifiedKanbanPrototypeV2() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-600 via-purple-700 to-purple-800 p-4 md:p-6">
+      {bannerError && (
+        <div className="fixed top-0 left-0 right-0 bg-red-600 text-white text-center py-2 z-50">
+          {bannerError}
+        </div>
+      )}
       <div className="max-w-7xl mx-auto">
         {/* ヘッダー */}
         <div className="bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl p-6 md:p-8 mb-6">
