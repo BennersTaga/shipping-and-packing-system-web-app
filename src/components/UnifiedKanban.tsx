@@ -1,4 +1,4 @@
-"use client";
+'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 // Unified Kanban UI – 梱包/出荷/在庫 の表側プロトタイプ
