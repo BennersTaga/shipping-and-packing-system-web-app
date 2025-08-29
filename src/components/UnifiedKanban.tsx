@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 // Unified Kanban UI – 梱包/出荷/在庫 の表側プロトタイプ
-// v2.20  
+// v2.20
 // - カード情報を縦並びにレイアウト（長い文字列でも途中で切れにくい）
 // - 操作ダイアログのボタンを一回しか押せないように（多重送信ガード）
 // - 梱包時の重複カードを自動マージ（同 rowIndex & 同ロケーション は加算更新）
@@ -19,7 +19,12 @@ export type PackingItem = {
   quantity: number; // 製造数量（ベース）
   manufactureProduct: string;
   status: "未処理" | "完了"; // 既存互換
-  packingInfo: { location: string; quantity: string; date?: string; user?: string };
+  packingInfo: {
+    location: string;
+    quantity: string;
+    date?: string;
+    user?: string;
+  };
 };
 
 type ShipType = "ロジカム出荷" | "羽野出荷";
@@ -70,15 +75,33 @@ type Filters = {
 };
 
 // DnD
-import { DndContext, PointerSensor, useSensor, useSensors, DragEndEvent } from "@dnd-kit/core";
-import { SortableContext, useSortable, rectSortingStrategy } from "@dnd-kit/sortable";
+import {
+  DndContext,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  useSortable,
+  rectSortingStrategy,
+} from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
 // ===== 純粋関数（テストしやすい） =====
-export function computeRestoredItem(base: PackingItem, location: string, qty: number): PackingItem {
+export function computeRestoredItem(
+  base: PackingItem,
+  location: string,
+  qty: number,
+): PackingItem {
   return {
     ...base,
-    packingInfo: { ...base.packingInfo, location: location.trim(), quantity: String(qty) },
+    packingInfo: {
+      ...base.packingInfo,
+      location: location.trim(),
+      quantity: String(qty),
+    },
     status: "完了",
   };
 }
@@ -186,13 +209,17 @@ export default function UnifiedKanbanPrototypeV2() {
       const params = new URLSearchParams();
       if (f.date) params.append("date", f.date);
       if (f.product) params.append("product", f.product);
-      if (f.status && legacyStatusMap[f.status]) params.append("status", legacyStatusMap[f.status]);
+      if (f.status && legacyStatusMap[f.status])
+        params.append("status", legacyStatusMap[f.status]);
       if (f.quantityMin) params.append("quantityMin", f.quantityMin);
       if (f.quantityMax) params.append("quantityMax", f.quantityMax);
 
       let data: PackingItem[] | null = null;
       try {
-        const res = await fetch(`${API_ENDPOINTS.SEARCH_PACKING}?${params.toString()}`, { cache: "no-store" });
+        const res = await fetch(
+          `${API_ENDPOINTS.SEARCH_PACKING}?${params.toString()}`,
+          { cache: "no-store" },
+        );
         const j = await res.json();
         if (j?.success) data = (j.data as PackingItem[]) || [];
         else throw new Error(j?.error || "検索に失敗しました");
@@ -201,10 +228,15 @@ export default function UnifiedKanbanPrototypeV2() {
       }
 
       const nextCards: Record<string, PackingItem> = {};
-      const col: Record<KanbanStatusId, string[]> = { manufactured: [], stock: [], shipped: [] };
+      const col: Record<KanbanStatusId, string[]> = {
+        manufactured: [],
+        stock: [],
+        shipped: [],
+      };
 
       for (const it of data) {
-        const uiStatus: KanbanStatusId = it.status === "未処理" ? "manufactured" : "stock";
+        const uiStatus: KanbanStatusId =
+          it.status === "未処理" ? "manufactured" : "stock";
         const id = makeId(it);
         nextCards[id] = it;
         col[uiStatus].push(id);
@@ -221,9 +253,29 @@ export default function UnifiedKanbanPrototypeV2() {
         const b1 = bases[1] || buildMockData(f.date)[1];
         const b2 = bases[2] || buildMockData(f.date)[2];
         return [
-          { id: `sample#1`, base: b1, ship: { type: "ロジカム出荷", quantity: 120, date: f.date } },
-          { id: `sample#2`, base: b2, ship: { type: "羽野出荷", quantity: 50, date: f.date } },
-          { id: `sample#3`, base: { ...b0, status: "完了", packingInfo: { ...b0.packingInfo, location: "パレット③", quantity: "100" } }, ship: { type: "ロジカム出荷", quantity: 80, date: f.date } },
+          {
+            id: `sample#1`,
+            base: b1,
+            ship: { type: "ロジカム出荷", quantity: 120, date: f.date },
+          },
+          {
+            id: `sample#2`,
+            base: b2,
+            ship: { type: "羽野出荷", quantity: 50, date: f.date },
+          },
+          {
+            id: `sample#3`,
+            base: {
+              ...b0,
+              status: "完了",
+              packingInfo: {
+                ...b0.packingInfo,
+                location: "パレット③",
+                quantity: "100",
+              },
+            },
+            ship: { type: "ロジカム出荷", quantity: 80, date: f.date },
+          },
         ];
       });
     } catch (e: any) {
@@ -235,11 +287,12 @@ export default function UnifiedKanbanPrototypeV2() {
 
   useEffect(() => {
     fetchData({ date: today });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [today]);
+  }, [today]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ==== DnD 設定 ====
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+  );
 
   function onDragEnd(event: DragEndEvent) {
     const { active, over } = event;
@@ -250,16 +303,28 @@ export default function UnifiedKanbanPrototypeV2() {
     if (!from || !to || from === to) return;
 
     // 製造→在庫、在庫→出荷 のみ許可（左→右）
-    const allowed = (from === "manufactured" && to === "stock") || (from === "stock" && to === "shipped");
+    const allowed =
+      (from === "manufactured" && to === "stock") ||
+      (from === "stock" && to === "shipped");
     if (!allowed) return;
 
     const item = cards[activeId];
     if (!item) return;
 
     if (from === "manufactured" && to === "stock") {
-      openDialog({ mode: "pack", item, origin: from, onSubmit: (p) => doPack(item, p as any) });
+      openDialog({
+        mode: "pack",
+        item,
+        origin: from,
+        onSubmit: (p) => doPack(item, p as any),
+      });
     } else if (from === "stock" && to === "shipped") {
-      openDialog({ mode: "ship", item, origin: from, onSubmit: (p) => doShip(item, p as any) });
+      openDialog({
+        mode: "ship",
+        item,
+        origin: from,
+        onSubmit: (p) => doShip(item, p as any),
+      });
     }
   }
 
@@ -268,10 +333,23 @@ export default function UnifiedKanbanPrototypeV2() {
     mode: "pack" | "ship" | "move" | null;
     origin?: KanbanStatusId;
     item?: PackingItem | null;
-    onSubmit?: (p: { location?: string; quantity?: number; shipType?: ShipType }) => Promise<void> | void;
+    onSubmit?: (p: {
+      location?: string;
+      quantity?: number;
+      shipType?: ShipType;
+    }) => Promise<void> | void;
   }>({ mode: null });
 
-  function openDialog(d: { mode: "pack" | "ship" | "move"; origin?: KanbanStatusId; item: PackingItem; onSubmit: (p: { location?: string; quantity?: number; shipType?: ShipType }) => Promise<void> | void }) {
+  function openDialog(d: {
+    mode: "pack" | "ship" | "move";
+    origin?: KanbanStatusId;
+    item: PackingItem;
+    onSubmit: (p: {
+      location?: string;
+      quantity?: number;
+      shipType?: ShipType;
+    }) => Promise<void> | void;
+  }) {
     setDialog(d);
   }
   function closeDialog() {
@@ -281,11 +359,21 @@ export default function UnifiedKanbanPrototypeV2() {
   // ==== 親ハンドラ（KanbanCard へ渡す） ====
   function requestPack(item: PackingItem) {
     const origin = findColumnOf(makeId(item), columns) || "manufactured";
-    openDialog({ mode: "pack", item, origin, onSubmit: (p) => doPack(item, p as any) });
+    openDialog({
+      mode: "pack",
+      item,
+      origin,
+      onSubmit: (p) => doPack(item, p as any),
+    });
   }
   function requestShip(item: PackingItem) {
     const origin = findColumnOf(makeId(item), columns) || "manufactured";
-    openDialog({ mode: "ship", item, origin, onSubmit: (p) => doShip(item, p as any) });
+    openDialog({
+      mode: "ship",
+      item,
+      origin,
+      onSubmit: (p) => doShip(item, p as any),
+    });
   }
   function requestMove(item: PackingItem) {
     const origin = findColumnOf(makeId(item), columns) || "stock";
@@ -296,7 +384,10 @@ export default function UnifiedKanbanPrototypeV2() {
       onSubmit: async (p) => {
         const to = (p.location || "").trim();
         if (!to) return;
-        const cur = Math.max(0, parseInt(item.packingInfo.quantity || "0", 10) || 0);
+        const cur = Math.max(
+          0,
+          parseInt(item.packingInfo.quantity || "0", 10) || 0,
+        );
         const { remain, move } = computeSplit(cur, p.quantity || cur);
         const movedQty = Math.max(1, Math.min(p.quantity || cur, cur));
         const rid = genRequestId();
@@ -309,14 +400,31 @@ export default function UnifiedKanbanPrototypeV2() {
             n[afterId] = updated;
             return n;
           });
-          setColumns((prev) => ({ ...prev, stock: prev.stock.map((id) => (id === beforeId ? afterId : id)) }));
+          setColumns((prev) => ({
+            ...prev,
+            stock: prev.stock.map((id) => (id === beforeId ? afterId : id)),
+          }));
         } else {
           // 分割：元を減算し、新カードを追加
           const beforeId = makeId(item);
-          const updatedOrigin: PackingItem = { ...item, packingInfo: { ...item.packingInfo, quantity: String(remain) } };
-          const moved: PackingItem = { ...item, packingInfo: { ...item.packingInfo, location: to, quantity: String(move) } };
+          const updatedOrigin: PackingItem = {
+            ...item,
+            packingInfo: { ...item.packingInfo, quantity: String(remain) },
+          };
+          const moved: PackingItem = {
+            ...item,
+            packingInfo: {
+              ...item.packingInfo,
+              location: to,
+              quantity: String(move),
+            },
+          };
           const newId = makeId(moved);
-          setCards((prev) => ({ ...prev, [beforeId]: updatedOrigin, [newId]: moved }));
+          setCards((prev) => ({
+            ...prev,
+            [beforeId]: updatedOrigin,
+            [newId]: moved,
+          }));
           setColumns((prev) => ({ ...prev, stock: [...prev.stock, newId] }));
         }
         closeDialog();
@@ -329,7 +437,11 @@ export default function UnifiedKanbanPrototypeV2() {
               action: "move",
               rowIndex: item.rowIndex,
               requestId: rid,
-              payload: { from: item.packingInfo.location, to, quantity: movedQty },
+              payload: {
+                from: item.packingInfo.location,
+                to,
+                quantity: movedQty,
+              },
               log: {
                 sheet: SHEET_LOG_NAME,
                 when: filters.date || today,
@@ -345,6 +457,7 @@ export default function UnifiedKanbanPrototypeV2() {
       },
     });
   }
+
   async function requestRestoreFromShipped(item: PackingItem) {
     const qtyStr = prompt("在庫へ戻す数量", "1");
     const q = Math.max(1, parseInt(qtyStr || "0", 10) || 0);
@@ -393,10 +506,16 @@ export default function UnifiedKanbanPrototypeV2() {
     setRestoreTarget(a);
   }
 
-  async function doRestoreFromArchive(a: ArchiveItem, payload: { location?: string; quantity?: number }) {
+  async function doRestoreFromArchive(
+    a: ArchiveItem,
+    payload: { location?: string; quantity?: number },
+  ) {
     const loc = (payload.location || "").trim();
     if (!loc) return;
-    const qty = Math.max(1, Math.min(a.ship.quantity, payload.quantity || a.ship.quantity));
+    const qty = Math.max(
+      1,
+      Math.min(a.ship.quantity, payload.quantity || a.ship.quantity),
+    );
     const rid = genRequestId();
 
     // 後処理（ドロワーを閉じ、対象カードへスクロール＆一時ハイライト）
@@ -406,7 +525,11 @@ export default function UnifiedKanbanPrototypeV2() {
       setTimeout(() => {
         const el = document.getElementById(`card-${targetId}`);
         if (el) {
-          el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+          el.scrollIntoView({
+            behavior: "smooth",
+            block: "center",
+            inline: "center",
+          });
           setHighlightId(targetId);
           setTimeout(() => setHighlightId(null), 1200);
         }
@@ -416,16 +539,32 @@ export default function UnifiedKanbanPrototypeV2() {
     // 既存在庫（同 rowIndex & 同ロケーション）があるか
     const existingId = Object.keys(cards).find((id) => {
       const it = cards[id];
-      return it && it.rowIndex === a.base.rowIndex && (it.packingInfo.location || "") === loc && columns.stock.includes(id);
+      return (
+        it &&
+        it.rowIndex === a.base.rowIndex &&
+        (it.packingInfo.location || "") === loc &&
+        columns.stock.includes(id)
+      );
     });
 
     if (existingId) {
       const current = cards[existingId];
-      const curQty = Math.max(0, parseInt(current.packingInfo.quantity || "0", 10) || 0);
+      const curQty = Math.max(
+        0,
+        parseInt(current.packingInfo.quantity || "0", 10) || 0,
+      );
       const nextQty = curQty + qty;
-      const updated: PackingItem = { ...current, packingInfo: { ...current.packingInfo, quantity: String(nextQty) } };
+      const updated: PackingItem = {
+        ...current,
+        packingInfo: { ...current.packingInfo, quantity: String(nextQty) },
+      };
       setCards((prev) => ({ ...prev, [existingId]: updated }));
-      setColumns((prev) => ({ ...prev, shipped: prev.shipped.filter((id) => (cards[id]?.rowIndex ?? -1) !== a.base.rowIndex) }));
+      setColumns((prev) => ({
+        ...prev,
+        shipped: prev.shipped.filter(
+          (id) => (cards[id]?.rowIndex ?? -1) !== a.base.rowIndex,
+        ),
+      }));
       try {
         await fetch(API_ENDPOINTS.UPDATE_PACKING, {
           method: "POST",
@@ -455,8 +594,12 @@ export default function UnifiedKanbanPrototypeV2() {
     const newId = makeId(updated);
     setCards((prev) => ({ ...prev, [newId]: updated }));
     setColumns((prev) => {
-      const shippedIds = prev.shipped.filter((id) => (cards[id]?.rowIndex ?? -1) !== a.base.rowIndex);
-      const nextStock = prev.stock.includes(newId) ? prev.stock : [...prev.stock, newId];
+      const shippedIds = prev.shipped.filter(
+        (id) => (cards[id]?.rowIndex ?? -1) !== a.base.rowIndex,
+      );
+      const nextStock = prev.stock.includes(newId)
+        ? prev.stock
+        : [...prev.stock, newId];
       return { ...prev, shipped: shippedIds, stock: nextStock };
     });
     try {
@@ -482,141 +625,64 @@ export default function UnifiedKanbanPrototypeV2() {
     finish(newId);
   }
 
-  // ==== 操作実装（サーバ更新は仮） ====
-  async function doPack(item: PackingItem, payload: { location?: string; quantity?: number }) {
+  // ==== 操作実装（サーバ更新は tickets API を使用） ====
+  async function doPack(
+    item: PackingItem,
+    payload: { location?: string; quantity?: number },
+  ) {
     const key = `${item.rowIndex}:pack`;
-    if (inflightRef.current.has(key)) return; // 連打ガード
+    if (inflightRef.current.has(key)) return;
     inflightRef.current.add(key);
-
     try {
-      const loc = (payload.location || "").trim();
-      const qty = Math.max(1, payload.quantity || item.quantity);
-      const rid = genRequestId();
-
-      // 既存在庫（同 rowIndex & 同ロケーション）にマージ
-      const existingId = Object.keys(cards).find((id) => columns.stock.includes(id) && cards[id]?.rowIndex === item.rowIndex && (cards[id]?.packingInfo.location || "") === loc);
-
-      if (existingId) {
-        const cur = Math.max(0, parseInt(cards[existingId].packingInfo.quantity || "0", 10) || 0);
-        const nextQty = cur + qty;
-        setCards((prev) => ({ ...prev, [existingId]: { ...prev[existingId], status: "完了", packingInfo: { ...prev[existingId].packingInfo, location: loc, quantity: String(nextQty) } } }));
-        // 製造列から元カードを除去
-        const beforeId = makeId(item);
-        setColumns((prev) => ({ ...prev, manufactured: prev.manufactured.filter((id) => id !== beforeId), stock: prev.stock }));
-      } else {
-        // 通常の在庫化
-        const beforeId = makeId(item);
-        const updated: PackingItem = { ...item, packingInfo: { ...item.packingInfo, location: loc, quantity: String(qty) }, status: "完了" };
-        const afterId = makeId(updated);
-        setCards((prev) => {
-          const n = { ...prev };
-          delete n[beforeId];
-          n[afterId] = updated;
-          return n;
-        });
-        moveCardEx(beforeId, "manufactured", "stock", afterId);
+      const res = await fetch(`/api/tickets/${item.rowIndex}/pack`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          qty: payload.quantity || 1,
+          storageLocation: payload.location,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "API error" }));
+        setBannerError(err.error || "API error");
+        return;
       }
-
-      // GAS 側へログ付きで送信（requestId + ヘッダ付与）
-      try {
-        await fetch(API_ENDPOINTS.UPDATE_PACKING, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Request-Id": rid },
-          body: JSON.stringify({
-            action: "pack",
-            rowIndex: item.rowIndex,
-            requestId: rid,
-            packingData: { location: loc, quantity: String(qty) },
-            log: {
-              sheet: SHEET_LOG_NAME,
-              when: filters.date || today,
-              type: "梱包",
-              location: loc,
-              quantity: qty,
-            },
-          }),
-        });
-      } catch {}
+      await fetchData();
+    } catch {
+      setBannerError("ネットワークエラー");
     } finally {
       inflightRef.current.delete(key);
       closeDialog();
     }
   }
 
-  async function doShip(item: PackingItem, payload: { location?: string; quantity?: number; shipType?: ShipType }) {
+  async function doShip(
+    item: PackingItem,
+    payload: { location?: string; quantity?: number; shipType?: ShipType },
+  ) {
     const key = `${item.rowIndex}:ship`;
     if (inflightRef.current.has(key)) return;
     inflightRef.current.add(key);
-
     try {
-      const from = findColumnOf(makeId(item), columns);
-      const shipType: ShipType = (payload.shipType as ShipType) || "ロジカム出荷";
-      // 製造→出荷では location 入力なし
-      const loc = from === "manufactured" ? "" : payload.location || item.packingInfo.location || "";
-      const maxFromManufactured = item.quantity;
-      const maxFromStock = Math.max(1, Number(item.packingInfo.quantity) || item.quantity);
-      const reqQty = payload.quantity || (from === "manufactured" ? maxFromManufactured : maxFromStock);
-      const qty = Math.max(1, Math.min(reqQty, from === "manufactured" ? maxFromManufactured : maxFromStock));
-      const rid = genRequestId();
-
-      try {
-        await fetch(API_ENDPOINTS.UPDATE_PACKING, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Request-Id": rid },
-          body: JSON.stringify({
-            action: "ship",
-            rowIndex: item.rowIndex,
-            requestId: rid,
-            packingData: { location: loc, quantity: String(qty) },
-            log: {
-              sheet: SHEET_LOG_NAME,
-              when: filters.date || today,
-              type: "出荷",
-              shipType,
-              location: loc,
-              quantity: qty,
-            },
-          }),
-        });
-      } catch {}
-
-      if (from === "stock") {
-        // 在庫→出荷は一部出荷に対応
-        const cur = Math.max(0, parseInt(item.packingInfo.quantity || "0", 10) || 0);
-        const { remain, move } = computeSplit(cur, qty);
-        // 出荷ログは常にアーカイブへ追加
-        const arch: ArchiveItem = {
-          id: `${makeId(item)}#${Date.now()}`,
-          base: item,
-          ship: { type: shipType, quantity: move, date: filters.date || today },
-        };
-        setArchive((prev) => [arch, ...prev]);
-
-        if (remain > 0) {
-          // 一部出荷：カードは在庫に残し、数量だけ減算
-          const beforeId = makeId(item);
-          const updated: PackingItem = { ...item, packingInfo: { ...item.packingInfo, quantity: String(remain) } };
-          setCards((prev) => ({ ...prev, [beforeId]: updated }));
-          closeDialog();
-          return;
-        }
-        // ちょうど出荷：列を出荷済みに移動
-        moveCardEx(makeId(item), "stock", "shipped");
-        closeDialog();
+      const res = await fetch(`/api/tickets/${item.rowIndex}/ship`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          qty: payload.quantity || 1,
+          shippingType: payload.shipType,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: "API error" }));
+        setBannerError(err.error || "API error");
         return;
       }
-
-      // 製造→出荷（全量 or 指定量）。UI上はカードを出荷済みに移動
-      const arch: ArchiveItem = {
-        id: `${makeId(item)}#${Date.now()}`,
-        base: item,
-        ship: { type: shipType, quantity: qty, date: filters.date || today },
-      };
-      setArchive((prev) => [arch, ...prev]);
-      moveCardEx(makeId(item), from || "manufactured", "shipped");
-      closeDialog();
+      await fetchData();
+    } catch {
+      setBannerError("ネットワークエラー");
     } finally {
       inflightRef.current.delete(key);
+      closeDialog();
     }
   }
 
@@ -629,7 +695,12 @@ export default function UnifiedKanbanPrototypeV2() {
       return Math.random().toString(36).slice(2);
     }
   }
-  function moveCardEx(oldId: string, from: KanbanStatusId, to: KanbanStatusId, newId?: string) {
+  function moveCardEx(
+    oldId: string,
+    from: KanbanStatusId,
+    to: KanbanStatusId,
+    newId?: string,
+  ) {
     setColumns((prev) => {
       const src = prev[from].filter((id) => id !== oldId);
       const dst = [...prev[to], newId || oldId];
@@ -639,7 +710,10 @@ export default function UnifiedKanbanPrototypeV2() {
   function makeId(item: PackingItem) {
     return `${item.rowIndex}_${item.packingInfo?.location || "-"}`;
   }
-  function findColumnOf(cardId: string, cols: Record<KanbanStatusId, string[]>) {
+  function findColumnOf(
+    cardId: string,
+    cols: Record<KanbanStatusId, string[]>,
+  ) {
     for (const k of Object.keys(cols) as KanbanStatusId[]) {
       if (cols[k].includes(cardId)) return k;
     }
@@ -647,7 +721,10 @@ export default function UnifiedKanbanPrototypeV2() {
   }
   function computeAfterMove(item: PackingItem, newLocation: string) {
     const beforeId = makeId(item);
-    const updated: PackingItem = { ...item, packingInfo: { ...item.packingInfo, location: newLocation } };
+    const updated: PackingItem = {
+      ...item,
+      packingInfo: { ...item.packingInfo, location: newLocation },
+    };
     const afterId = makeId(updated);
     return { beforeId, afterId, updated };
   }
@@ -657,19 +734,42 @@ export default function UnifiedKanbanPrototypeV2() {
     try {
       const mock = buildMockData(today)[0];
       const id0 = makeId(mock);
-      console.assert(typeof id0 === "string" && id0.startsWith(String(mock.rowIndex)), "[TEST] makeId basic");
+      console.assert(
+        typeof id0 === "string" && id0.startsWith(String(mock.rowIndex)),
+        "[TEST] makeId basic",
+      );
       const { beforeId, afterId } = computeAfterMove(mock, "テスト棚");
-      console.assert(beforeId !== afterId, "[TEST] computeAfterMove id changes");
+      console.assert(
+        beforeId !== afterId,
+        "[TEST] computeAfterMove id changes",
+      );
       const restored = computeRestoredItem(mock, "棚A", 10);
       const id1 = makeId(restored);
-      console.assert(id1 !== id0 && restored.status === "完了" && restored.packingInfo.quantity === "10", "[TEST] restore logic");
+      console.assert(
+        id1 !== id0 &&
+          restored.status === "完了" &&
+          restored.packingInfo.quantity === "10",
+        "[TEST] restore logic",
+      );
       const sp = computeSplit(20, 10);
-      console.assert(sp.remain === 10 && sp.move === 10, "[TEST] split 20->10/10");
+      console.assert(
+        sp.remain === 10 && sp.move === 10,
+        "[TEST] split 20->10/10",
+      );
       const md = buildMockData(today);
-      console.assert(Array.isArray(md) && md.length === 3 && md[2].rowIndex === 1647, "[TEST] mock data closed array");
-      console.assert(STORAGE_OPTIONS.length === 9 && STORAGE_OPTIONS[0].includes("パレット"), "[TEST] storage options ready");
+      console.assert(
+        Array.isArray(md) && md.length === 3 && md[2].rowIndex === 1647,
+        "[TEST] mock data closed array",
+      );
+      console.assert(
+        STORAGE_OPTIONS.length === 9 && STORAGE_OPTIONS[0].includes("パレット"),
+        "[TEST] storage options ready",
+      );
       const item2 = md[1];
-      console.assert(item2.status === "完了" && !!item2.packingInfo.location, "[TEST] stock item has location");
+      console.assert(
+        item2.status === "完了" && !!item2.packingInfo.location,
+        "[TEST] stock item has location",
+      );
       console.log("[TEST] smoke OK");
     } catch (e) {
       console.warn("[TEST] smoke failed", e);
@@ -677,7 +777,7 @@ export default function UnifiedKanbanPrototypeV2() {
   }, [today]);
 
   // ==== レイアウト ====
-  const headerTitle = "梱包&出荷 一体型ボード（試作 v2.20）";
+  const headerTitle = "梱包・出荷 一体型ボード（試作 v2.20）";
   const currentDialog = dialog;
   const currentItem = dialog.item as PackingItem | undefined;
   const origin = dialog.origin as KanbanStatusId | undefined;
@@ -685,10 +785,17 @@ export default function UnifiedKanbanPrototypeV2() {
     ? currentDialog.mode === "ship"
       ? origin === "manufactured"
         ? currentItem.quantity
-        : Math.max(1, parseInt(currentItem.packingInfo.quantity || "0", 10) || currentItem.quantity)
+        : Math.max(
+            1,
+            parseInt(currentItem.packingInfo.quantity || "0", 10) ||
+              currentItem.quantity,
+          )
       : currentDialog.mode === "move"
-      ? Math.max(1, parseInt(currentItem.packingInfo.quantity || "0", 10) || 1)
-      : currentItem.quantity
+        ? Math.max(
+            1,
+            parseInt(currentItem.packingInfo.quantity || "0", 10) || 1,
+          )
+        : currentItem.quantity
     : 1;
 
   return (
@@ -699,6 +806,11 @@ export default function UnifiedKanbanPrototypeV2() {
         </div>
       )}
       <div className="max-w-7xl mx-auto">
+        {bannerError && (
+          <div className="mb-4 rounded bg-red-100 p-2 text-red-700">
+            {bannerError}
+          </div>
+        )}
         {/* ヘッダー */}
         <div className="bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl p-6 md:p-8 mb-6">
           <div className="flex items-center justify-between gap-4">
@@ -717,29 +829,44 @@ export default function UnifiedKanbanPrototypeV2() {
           {/* フィルター */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mt-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">製造日</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                製造日
+              </label>
               <input
                 type="date"
                 value={filters.date}
-                onChange={(e) => setFilters({ ...filters, date: e.target.value })}
+                onChange={(e) =>
+                  setFilters({ ...filters, date: e.target.value })
+                }
                 className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">味付け種類</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                味付け種類
+              </label>
               <input
                 type="text"
                 placeholder="味付け種類で検索"
                 value={filters.product}
-                onChange={(e) => setFilters({ ...filters, product: e.target.value })}
+                onChange={(e) =>
+                  setFilters({ ...filters, product: e.target.value })
+                }
                 className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">ステータス</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                ステータス
+              </label>
               <select
                 value={filters.status}
-                onChange={(e) => setFilters({ ...filters, status: e.target.value as Filters["status"] })}
+                onChange={(e) =>
+                  setFilters({
+                    ...filters,
+                    status: e.target.value as Filters["status"],
+                  })
+                }
                 className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
               >
                 <option value="">すべて</option>
@@ -749,31 +876,46 @@ export default function UnifiedKanbanPrototypeV2() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">数量範囲</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                数量範囲
+              </label>
               <div className="flex gap-2">
                 <input
                   type="number"
                   placeholder="最小"
                   value={filters.quantityMin}
-                  onChange={(e) => setFilters({ ...filters, quantityMin: e.target.value })}
+                  onChange={(e) =>
+                    setFilters({ ...filters, quantityMin: e.target.value })
+                  }
                   className="w-1/2 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
                 />
                 <input
                   type="number"
                   placeholder="最大"
                   value={filters.quantityMax}
-                  onChange={(e) => setFilters({ ...filters, quantityMax: e.target.value })}
+                  onChange={(e) =>
+                    setFilters({ ...filters, quantityMax: e.target.value })
+                  }
                   className="w-1/2 px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
                 />
               </div>
             </div>
             <div className="flex gap-2 items-end">
-              <button onClick={() => fetchData()} className="flex-1 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors">
+              <button
+                onClick={() => fetchData()}
+                className="flex-1 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors"
+              >
                 フィルター
               </button>
               <button
                 onClick={() => {
-                  const next: Filters = { date: today, product: "", status: "", quantityMin: "", quantityMax: "" };
+                  const next: Filters = {
+                    date: today,
+                    product: "",
+                    status: "",
+                    quantityMin: "",
+                    quantityMax: "",
+                  };
                   setFilters(next);
                   fetchData(next);
                 }}
@@ -794,7 +936,10 @@ export default function UnifiedKanbanPrototypeV2() {
           <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>
         ) : (
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4" style={{ gridAutoFlow: "column", overflowX: "auto" }}>
+            <div
+              className="grid grid-cols-1 md:grid-cols-3 gap-4"
+              style={{ gridAutoFlow: "column", overflowX: "auto" }}
+            >
               {K_STATUSES.map((col) => (
                 <KanbanColumn
                   key={col.id}
@@ -819,7 +964,13 @@ export default function UnifiedKanbanPrototypeV2() {
         {currentDialog.mode && currentItem && (
           <SimpleDialog
             onClose={closeDialog}
-            title={currentDialog.mode === "pack" ? "梱包（在庫へ移動）" : currentDialog.mode === "move" ? "在庫移動" : "出荷登録"}
+            title={
+              currentDialog.mode === "pack"
+                ? "梱包（在庫へ移動）"
+                : currentDialog.mode === "move"
+                  ? "在庫移動"
+                  : "出荷登録"
+            }
           >
             <ActionForm
               mode={currentDialog.mode}
@@ -839,7 +990,10 @@ export default function UnifiedKanbanPrototypeV2() {
 
         {/* 復帰ダイアログ（アーカイブ→在庫） */}
         {restoreTarget && (
-          <SimpleDialog title="出荷アーカイブから在庫へ戻す" onClose={() => setRestoreTarget(null)}>
+          <SimpleDialog
+            title="出荷アーカイブから在庫へ戻す"
+            onClose={() => setRestoreTarget(null)}
+          >
             <ActionForm
               mode="pack"
               defaultLocation={restoreTarget.base.packingInfo.location || ""}
@@ -920,7 +1074,9 @@ function KanbanColumn({
       <SortableContext items={cardIds} strategy={rectSortingStrategy}>
         <div id={id} className="space-y-3 min-h-[50vh]" data-droppable>
           {cardIds.length === 0 && (
-            <div className="h-32 grid place-items-center border-2 border-dashed rounded-xl text-gray-400">ここにカードをドラッグ</div>
+            <div className="h-32 grid place-items-center border-2 border-dashed rounded-xl text-gray-400">
+              ここにカードをドラッグ
+            </div>
           )}
           {cardIds.map((cid) => (
             <KanbanCard
@@ -961,7 +1117,14 @@ function KanbanCard({
   onRequestMove: (item: PackingItem) => void;
   onRequestRestore: (item: PackingItem) => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id });
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
@@ -981,7 +1144,8 @@ function KanbanCard({
     >
       <div className="flex justify-between items-center mb-2">
         <div className="text-sm text-gray-600">
-          {item.manufactureDate} ・バッチ{item.batchNo || "-"} ・行No.{item.rowIndex}
+          {item.manufactureDate} ・バッチ{item.batchNo || "-"} ・行No.
+          {item.rowIndex}
         </div>
         {columnId === "stock" && (
           <span className="inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
@@ -1008,7 +1172,9 @@ function KanbanCard({
         </div>
 
         {/* 4行目：保管場所（在庫列のみ） */}
-        {columnId === "stock" && <Field k="保管場所" v={item.packingInfo.location || "-"} />}
+        {columnId === "stock" && (
+          <Field k="保管場所" v={item.packingInfo.location || "-"} />
+        )}
       </div>
 
       {/* アクション */}
@@ -1025,7 +1191,11 @@ function KanbanCard({
             <ButtonLine onClick={() => onRequestMove(item)}>移動</ButtonLine>
           </>
         )}
-        {columnId === "shipped" && <ButtonLine onClick={() => onRequestRestore(item)}>在庫へ戻す</ButtonLine>}
+        {columnId === "shipped" && (
+          <ButtonLine onClick={() => onRequestRestore(item)}>
+            在庫へ戻す
+          </ButtonLine>
+        )}
       </div>
     </div>
   );
@@ -1034,30 +1204,58 @@ function KanbanCard({
 function Field({ k, v }: { k: string; v: React.ReactNode }) {
   return (
     <div className="flex flex-col">
-      <span className={`inline-flex h-6 items-center px-2 rounded bg-gray-600 text-white text-xs font-bold mb-1 ${LABEL_WIDTH}`}>
+      <span
+        className={`inline-flex h-6 items-center px-2 rounded bg-gray-600 text-white text-xs font-bold mb-1 ${LABEL_WIDTH}`}
+      >
         {k}
       </span>
-      <span className="font-bold text-gray-900 break-words leading-tight">{v}</span>
+      <span className="font-bold text-gray-900 break-words leading-tight">
+        {v}
+      </span>
     </div>
   );
 }
 
-function ButtonLine({ children, onClick }: { children: React.ReactNode; onClick?: () => void }) {
+function ButtonLine({
+  children,
+  onClick,
+}: {
+  children: React.ReactNode;
+  onClick?: () => void;
+}) {
   return (
-    <button onClick={onClick} className="px-3 py-1.5 rounded-full border-2 border-purple-600 text-purple-700 hover:bg-purple-50 text-xs">
+    <button
+      onClick={onClick}
+      className="px-3 py-1.5 rounded-full border-2 border-purple-600 text-purple-700 hover:bg-purple-50 text-xs"
+    >
       {children}
     </button>
   );
 }
 
 // ===== ダイアログ & フォーム =====
-function SimpleDialog({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+function SimpleDialog({
+  title,
+  children,
+  onClose,
+}: {
+  title: string;
+  children: React.ReactNode;
+  onClose: () => void;
+}) {
   return (
-    <div className="fixed inset-0 z-[70] grid place-items-center bg-black/40 p-4" role="dialog" aria-modal="true">
+    <div
+      className="fixed inset-0 z-[70] grid place-items-center bg-black/40 p-4"
+      role="dialog"
+      aria-modal="true"
+    >
       <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl">
         <div className="flex items-center justify-between px-5 py-4 border-b">
           <h3 className="text-lg font-semibold">{title}</h3>
-          <button onClick={onClose} className="px-2 py-1 text-gray-500 hover:text-gray-700">
+          <button
+            onClick={onClose}
+            className="px-2 py-1 text-gray-500 hover:text-gray-700"
+          >
             ×
           </button>
         </div>
@@ -1084,7 +1282,11 @@ function ActionForm({
   origin?: KanbanStatusId;
   defaultLocation?: string;
   maxQuantity: number;
-  onSubmit: (p: { location?: string; quantity?: number; shipType?: ShipType }) => Promise<void> | void;
+  onSubmit: (p: {
+    location?: string;
+    quantity?: number;
+    shipType?: ShipType;
+  }) => Promise<void> | void;
   onCancel: () => void;
   showLocation: boolean;
   showQuantity: boolean;
@@ -1106,7 +1308,11 @@ function ActionForm({
         if (showQuantity && quantity <= 0) return;
         try {
           setSubmitting(true);
-          await onSubmit({ location: showLocation ? location : undefined, quantity: showQuantity ? quantity : undefined, shipType });
+          await onSubmit({
+            location: showLocation ? location : undefined,
+            quantity: showQuantity ? quantity : undefined,
+            shipType,
+          });
         } finally {
           setSubmitting(false);
         }
@@ -1115,7 +1321,11 @@ function ActionForm({
     >
       {showLocation && (
         <div>
-          <label className="block text-sm font-medium mb-1">{mode === "pack" || mode === "move" ? "保管場所" : "出荷元ロケーション"}</label>
+          <label className="block text-sm font-medium mb-1">
+            {mode === "pack" || mode === "move"
+              ? "保管場所"
+              : "出荷元ロケーション"}
+          </label>
           {useSelectLocation ? (
             <select
               value={location}
@@ -1144,7 +1354,9 @@ function ActionForm({
 
       {showQuantity && (
         <div>
-          <label className="block text-sm font-medium mb-1">数量（最大 {maxQuantity}）</label>
+          <label className="block text-sm font-medium mb-1">
+            数量（最大 {maxQuantity}）
+          </label>
           <input
             type="number"
             min={1}
@@ -1176,11 +1388,26 @@ function ActionForm({
       )}
 
       <div className="flex gap-2 justify-end pt-2">
-        <button type="button" onClick={onCancel} disabled={submitting} className="px-4 py-2 rounded-lg border">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={submitting}
+          className="px-4 py-2 rounded-lg border"
+        >
           キャンセル
         </button>
-        <button type="submit" disabled={submitting} className="px-4 py-2 rounded-lg bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-60">
-          {submitting ? "処理中…" : mode === "pack" ? "在庫へ移動" : mode === "move" ? "移動する" : "出荷を登録"}
+        <button
+          type="submit"
+          disabled={submitting}
+          className="px-4 py-2 rounded-lg bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-60"
+        >
+          {submitting
+            ? "処理中…"
+            : mode === "pack"
+              ? "在庫へ移動"
+              : mode === "move"
+                ? "移動する"
+                : "出荷を登録"}
         </button>
       </div>
     </form>
@@ -1224,7 +1451,10 @@ function ArchiveDrawer({
             placeholder="味付け/魚種/産地で検索"
             className="px-3 py-2 border rounded-lg"
           />
-          <button onClick={onClose} className="px-3 py-2 rounded-lg bg-gray-200">
+          <button
+            onClick={onClose}
+            className="px-3 py-2 rounded-lg bg-gray-200"
+          >
             閉じる
           </button>
         </div>
