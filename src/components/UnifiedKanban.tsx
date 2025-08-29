@@ -40,9 +40,7 @@ const API_ENDPOINTS = {
   SEARCH_PACKING: "/api/packing/search",
   UPDATE_PACKING: "/api/packing/update",
 };
-
 const SHEET_LOG_NAME = "梱包&出荷";
-
 const STORAGE_OPTIONS = [
   "パレット①",
   "パレット②",
@@ -112,6 +110,47 @@ export function computeSplit(originalQty: number, moveQty: number) {
   const o = Math.max(0, Number(originalQty) || 0);
   const m = Math.max(1, Math.min(Number(moveQty) || 0, o));
   return { remain: o - m, move: m };
+}
+
+function buildMockData(date: string): PackingItem[] {
+  return [
+    {
+      rowIndex: 1645,
+      manufactureDate: date,
+      batchNo: "B-645",
+      seasoningType: "醤油(生食用)",
+      fishType: "ホウボウ",
+      origin: "福岡",
+      quantity: 200,
+      manufactureProduct: "フィシュル商品",
+      status: "未処理",
+      packingInfo: { location: "", quantity: "0" },
+    },
+    {
+      rowIndex: 1646,
+      manufactureDate: date,
+      batchNo: "B-646",
+      seasoningType: "醤油(生食用)",
+      fishType: "ホウボウ",
+      origin: "福岡",
+      quantity: 443,
+      manufactureProduct: "フィシュル商品",
+      status: "完了",
+      packingInfo: { location: "パレット②", quantity: "443", user: "A" },
+    },
+    {
+      rowIndex: 1647,
+      manufactureDate: date,
+      batchNo: "B-647",
+      seasoningType: "にんにく醤油(生食用)",
+      fishType: "ホウボウ",
+      origin: "福岡",
+      quantity: 200,
+      manufactureProduct: "フィシュル商品",
+      status: "完了",
+      packingInfo: { location: "パレット①", quantity: "200", user: "B" },
+    },
+  ];
 }
 
 // ===== メイン =====
@@ -350,6 +389,8 @@ export default function UnifiedKanbanPrototypeV2() {
           parseInt(item.packingInfo.quantity || "0", 10) || 0,
         );
         const { remain, move } = computeSplit(cur, p.quantity || cur);
+        const movedQty = Math.max(1, Math.min(p.quantity || cur, cur));
+        const rid = genRequestId();
         if (move === cur) {
           // 全量移動（IDも更新）
           const { beforeId, afterId, updated } = computeAfterMove(item, to);
@@ -387,22 +428,37 @@ export default function UnifiedKanbanPrototypeV2() {
           setColumns((prev) => ({ ...prev, stock: [...prev.stock, newId] }));
         }
         closeDialog();
-        // ログ送信（任意）
+        // ログ送信（必須：from/to/quantity + requestId）
         try {
           await fetch(API_ENDPOINTS.UPDATE_PACKING, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", "X-Request-Id": rid },
             body: JSON.stringify({
               action: "move",
               rowIndex: item.rowIndex,
-              payload: { to, quantity: p.quantity },
+              requestId: rid,
+              payload: {
+                from: item.packingInfo.location,
+                to,
+                quantity: movedQty,
+              },
+              log: {
+                sheet: SHEET_LOG_NAME,
+                when: filters.date || today,
+                type: "移動",
+                fromLocation: item.packingInfo.location,
+                toLocation: to,
+                location: to,
+                quantity: movedQty,
+              },
             }),
           });
         } catch {}
       },
     });
   }
-  function requestRestoreFromShipped(item: PackingItem) {
+
+  async function requestRestoreFromShipped(item: PackingItem) {
     const qtyStr = prompt("在庫へ戻す数量", "1");
     const q = Math.max(1, parseInt(qtyStr || "0", 10) || 0);
     const loc = prompt("戻す保管場所", item.packingInfo.location || "");
@@ -421,6 +477,28 @@ export default function UnifiedKanbanPrototypeV2() {
       shipped: prev.shipped.filter((id) => id !== before),
       stock: prev.stock.includes(after) ? prev.stock : [...prev.stock, after],
     }));
+    // 復帰ログ（restore）
+    try {
+      const rid = genRequestId();
+      await fetch(API_ENDPOINTS.UPDATE_PACKING, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Request-Id": rid },
+        body: JSON.stringify({
+          action: "restore",
+          rowIndex: item.rowIndex,
+          requestId: rid,
+          payload: { to: loc, quantity: q },
+          log: {
+            sheet: SHEET_LOG_NAME,
+            when: filters.date || today,
+            type: "復帰",
+            toLocation: loc,
+            location: loc,
+            quantity: q,
+          },
+        }),
+      });
+    } catch {}
   }
 
   function restoreFromArchive(a: ArchiveItem) {
@@ -428,7 +506,7 @@ export default function UnifiedKanbanPrototypeV2() {
     setRestoreTarget(a);
   }
 
-  function doRestoreFromArchive(
+  async function doRestoreFromArchive(
     a: ArchiveItem,
     payload: { location?: string; quantity?: number },
   ) {
@@ -438,6 +516,7 @@ export default function UnifiedKanbanPrototypeV2() {
       1,
       Math.min(a.ship.quantity, payload.quantity || a.ship.quantity),
     );
+    const rid = genRequestId();
 
     // 後処理（ドロワーを閉じ、対象カードへスクロール＆一時ハイライト）
     const finish = (targetId: string) => {
@@ -486,6 +565,26 @@ export default function UnifiedKanbanPrototypeV2() {
           (id) => (cards[id]?.rowIndex ?? -1) !== a.base.rowIndex,
         ),
       }));
+      try {
+        await fetch(API_ENDPOINTS.UPDATE_PACKING, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Request-Id": rid },
+          body: JSON.stringify({
+            action: "restore",
+            rowIndex: a.base.rowIndex,
+            requestId: rid,
+            payload: { to: loc, quantity: qty },
+            log: {
+              sheet: SHEET_LOG_NAME,
+              when: filters.date || today,
+              type: "復帰",
+              toLocation: loc,
+              location: loc,
+              quantity: qty,
+            },
+          }),
+        });
+      } catch {}
       finish(existingId);
       return;
     }
@@ -503,10 +602,30 @@ export default function UnifiedKanbanPrototypeV2() {
         : [...prev.stock, newId];
       return { ...prev, shipped: shippedIds, stock: nextStock };
     });
+    try {
+      await fetch(API_ENDPOINTS.UPDATE_PACKING, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Request-Id": rid },
+        body: JSON.stringify({
+          action: "restore",
+          rowIndex: a.base.rowIndex,
+          requestId: rid,
+          payload: { to: loc, quantity: qty },
+          log: {
+            sheet: SHEET_LOG_NAME,
+            when: filters.date || today,
+            type: "復帰",
+            toLocation: loc,
+            location: loc,
+            quantity: qty,
+          },
+        }),
+      });
+    } catch {}
     finish(newId);
   }
 
-  // ==== 操作実装（サーバ更新は仮） ====
+  // ==== 操作実装（サーバ更新は tickets API を使用） ====
   async function doPack(
     item: PackingItem,
     payload: { location?: string; quantity?: number },
@@ -554,9 +673,7 @@ export default function UnifiedKanbanPrototypeV2() {
         }),
       });
       if (!res.ok) {
-        const err = await res
-          .json()
-          .catch(() => ({ error: "API error" }));
+        const err = await res.json().catch(() => ({ error: "API error" }));
         setBannerError(err.error || "API error");
         return;
       }
@@ -570,6 +687,14 @@ export default function UnifiedKanbanPrototypeV2() {
   }
 
   // ==== ユーティリティ ====
+  function genRequestId() {
+    try {
+      const v = (globalThis as any)?.crypto?.randomUUID?.();
+      return v || Math.random().toString(36).slice(2);
+    } catch {
+      return Math.random().toString(36).slice(2);
+    }
+  }
   function moveCardEx(
     oldId: string,
     from: KanbanStatusId,
@@ -675,6 +800,11 @@ export default function UnifiedKanbanPrototypeV2() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-600 via-purple-700 to-purple-800 p-4 md:p-6">
+      {bannerError && (
+        <div className="fixed top-0 left-0 right-0 bg-red-600 text-white text-center py-2 z-50">
+          {bannerError}
+        </div>
+      )}
       <div className="max-w-7xl mx-auto">
         {bannerError && (
           <div className="mb-4 rounded bg-red-100 p-2 text-red-700">
@@ -1300,12 +1430,11 @@ function ArchiveDrawer({
   onQuery: (q: string) => void;
   onRestore: (x: ArchiveItem) => void;
 }) {
-  const list = items.filter(
-    (i) =>
-      !query ||
-      `${i.base.seasoningType} ${i.base.fishType} ${i.base.origin} ${i.base.manufactureProduct}`
-        .toLowerCase()
-        .includes(query.toLowerCase()),
+  const list = items.filter((i) =>
+    !query ||
+    `${i.base.seasoningType}${i.base.fishType}${i.base.origin}${i.base.manufactureProduct}`
+      .toLowerCase()
+      .includes(query.toLowerCase())
   );
   return (
     <div
@@ -1336,68 +1465,26 @@ function ArchiveDrawer({
         )}
         {list.map((i) => (
           <div key={i.id} className="border rounded-xl p-3 mb-3 bg-gray-50">
-            <div className="flex items-center justify-between text-xs text-gray-600 mb-2">
+            <div className="flex items-center justify-between mb-2">
               <div>
-                {i.ship.date} ・ 行No.{i.base.rowIndex}
+                <div className="font-semibold">{i.base.seasoningType}</div>
+                <div className="text-sm text-gray-500">
+                  {i.base.fishType} / {i.base.origin}
+                </div>
               </div>
-              <span className="px-2 py-0.5 rounded-full border text-[11px]">
-                {i.ship.type}
-              </span>
+              <button
+                onClick={() => onRestore(i)}
+                className="px-2 py-1 text-sm bg-purple-600 text-white rounded-lg"
+              >
+                復帰
+              </button>
             </div>
-            <div className="grid grid-cols-1 gap-2 text-sm">
-              <Field k="味付け種類" v={i.base.seasoningType} />
-              <Field k="産地" v={i.base.origin} />
-              <Field k="魚種" v={i.base.fishType} />
-              <Field k="出荷数量" v={`${i.ship.quantity} 個`} />
-            </div>
-            <div className="flex justify-end mt-2">
-              <ButtonLine onClick={() => onRestore(i)}>在庫へ戻す</ButtonLine>
+            <div className="text-sm">
+              {i.ship.type} {i.ship.quantity}個 ({i.ship.date})
             </div>
           </div>
         ))}
       </div>
     </div>
   );
-}
-
-// ==== モックデータ ====
-function buildMockData(date: string): PackingItem[] {
-  return [
-    {
-      rowIndex: 1645,
-      manufactureDate: date,
-      batchNo: `B-${String(1645).slice(-3)}`,
-      seasoningType: "醤油(生食用)",
-      fishType: "ホウボウ",
-      origin: "福岡",
-      quantity: 200,
-      manufactureProduct: "フィシュル商品",
-      status: "未処理",
-      packingInfo: { location: "", quantity: "0" },
-    },
-    {
-      rowIndex: 1646,
-      manufactureDate: date,
-      batchNo: `B-${String(1646).slice(-3)}`,
-      seasoningType: "醤油(生食用)",
-      fishType: "ホウボウ",
-      origin: "福岡",
-      quantity: 443,
-      manufactureProduct: "フィシュル商品",
-      status: "完了",
-      packingInfo: { location: "パレット②", quantity: "443", user: "A" },
-    },
-    {
-      rowIndex: 1647,
-      manufactureDate: date,
-      batchNo: `B-${String(1647).slice(-3)}`,
-      seasoningType: "にんにく醤油(生食用)",
-      fishType: "ホウボウ",
-      origin: "福岡",
-      quantity: 200,
-      manufactureProduct: "フィシュル商品",
-      status: "完了",
-      packingInfo: { location: "パレット①", quantity: "200", user: "B" },
-    },
-  ];
 }
