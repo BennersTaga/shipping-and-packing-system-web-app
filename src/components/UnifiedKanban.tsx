@@ -625,7 +625,7 @@ export default function UnifiedKanbanPrototypeV2() {
     finish(newId);
   }
 
-  // ==== 操作実装（サーバ更新は tickets API を使用） ====
+  // ==== 操作実装（サーバ更新） ====
   async function doPack(
     item: PackingItem,
     payload: { location?: string; quantity?: number },
@@ -634,12 +634,27 @@ export default function UnifiedKanbanPrototypeV2() {
     if (inflightRef.current.has(key)) return;
     inflightRef.current.add(key);
     try {
-      const res = await fetch(`/api/tickets/${item.rowIndex}/pack`, {
+      const rid = genRequestId();
+      const qty = payload.quantity || 1;
+      const loc = (payload.location || "").trim();
+      const res = await fetch(API_ENDPOINTS.UPDATE_PACKING, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Request-Id": rid,
+        },
         body: JSON.stringify({
-          qty: payload.quantity || 1,
-          storageLocation: payload.location,
+          action: "pack",
+          rowIndex: item.rowIndex,
+          requestId: rid,
+          packingData: { location: loc, quantity: String(qty) },
+          log: {
+            sheet: SHEET_LOG_NAME,
+            when: filters.date || today,
+            type: "梱包",
+            location: loc,
+            quantity: qty,
+          },
         }),
       });
       if (!res.ok) {
@@ -664,16 +679,34 @@ export default function UnifiedKanbanPrototypeV2() {
     if (inflightRef.current.has(key)) return;
     inflightRef.current.add(key);
     try {
-      const res = await fetch(`/api/tickets/${item.rowIndex}/ship`, {
+      const rid = genRequestId();
+      const qty = payload.quantity || 1;
+      const loc = (payload.location || "").trim();
+      const res = await fetch(API_ENDPOINTS.UPDATE_PACKING, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Request-Id": rid,
+        },
         body: JSON.stringify({
-          qty: payload.quantity || 1,
-          shippingType: payload.shipType,
+          action: "ship",
+          rowIndex: item.rowIndex,
+          requestId: rid,
+          packingData: { location: loc, quantity: String(qty) },
+          log: {
+            sheet: SHEET_LOG_NAME,
+            when: filters.date || today,
+            type: "出荷",
+            shipType: payload.shipType,
+            location: loc,
+            quantity: qty,
+          },
         }),
       });
       if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: "API error" }));
+        const err = await res
+          .json()
+          .catch(() => ({ error: "API error" }));
         setBannerError(err.error || "API error");
         return;
       }
