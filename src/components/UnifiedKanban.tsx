@@ -1295,7 +1295,7 @@ function ActionForm({
   shipTypeOptions: ShipType[];
 }) {
   const [location, setLocation] = useState(defaultLocation || "");
-  const [quantity, setQuantity] = useState<number | "">(1);
+  const [quantity, setQuantity] = useState<string>(""); // 入力中に空文字を許容
   const [shipType, setShipType] = useState<ShipType>("ロジカム出荷");
   const [submitting, setSubmitting] = useState(false);
 
@@ -1303,25 +1303,21 @@ function ActionForm({
     <form
       onSubmit={async (e) => {
         e.preventDefault();
-        if (submitting) return; // 二重送信防止
+        if (submitting) return;
+
+        // 数量確定：ここで初めて数値化＆バリデーション
+        const qNum = Math.floor(Number(quantity));
+        const isQtyValid = showQuantity && Number.isFinite(qNum) && qNum >= 1;
         if (showLocation && !location) return;
-        if (showQuantity && quantity === "") return;
+        if (showQuantity && !isQtyValid) return;
+
+        const safeQty = Math.max(1, Math.min(qNum, Math.max(1, maxQuantity)));
+
         try {
           setSubmitting(true);
-          const qFinal =
-            showQuantity
-              ? Math.max(
-                  1,
-                  Math.min(
-                    maxQuantity,
-                    Number(quantity === "" ? 0 : quantity),
-                  ),
-                )
-              : undefined;
-
           await onSubmit({
             location: showLocation ? location : undefined,
-            quantity: qFinal,
+            quantity: showQuantity ? safeQty : undefined, // 数値で渡す
             shipType,
           });
         } finally {
@@ -1370,13 +1366,28 @@ function ActionForm({
           </label>
           <input
             type="number"
+            inputMode="numeric"
+            pattern="[0-9]*"
             min={1}
-            max={Math.max(1, maxQuantity)}
-            value={quantity === "" ? "" : quantity}
+            max={Math.max(1, maxQuantity)} // ヒント目的。強制クランプはしない
+            placeholder={`1〜${Math.max(1, maxQuantity)}`}
+            value={quantity}
             disabled={submitting}
             onChange={(e) => {
-              const v = e.target.value;
-              setQuantity(v === "" ? "" : Number(v));
+              // ここでは文字列のまま保持（空文字OK）
+              setQuantity(e.target.value); // 必要なら .replace(/[^\d]/g, "") で非数字除去
+            }}
+            onBlur={() => {
+              // フォーカスアウト時に軽く整形（任意）
+              if (quantity === "") return;
+              const n = Math.floor(Number(quantity));
+              if (!Number.isFinite(n) || n < 1) {
+                setQuantity("1");
+              } else if (n > Math.max(1, maxQuantity)) {
+                setQuantity(String(Math.max(1, maxQuantity)));
+              } else {
+                setQuantity(String(n));
+              }
             }}
             className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
           />
