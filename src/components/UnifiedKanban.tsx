@@ -1295,7 +1295,7 @@ function ActionForm({
   shipTypeOptions: ShipType[];
 }) {
   const [location, setLocation] = useState(defaultLocation || "");
-  const [quantity, setQuantity] = useState(1);
+  const [quantity, setQuantity] = useState<number | "">(1);
   const [shipType, setShipType] = useState<ShipType>("ロジカム出荷");
   const [submitting, setSubmitting] = useState(false);
 
@@ -1305,12 +1305,23 @@ function ActionForm({
         e.preventDefault();
         if (submitting) return; // 二重送信防止
         if (showLocation && !location) return;
-        if (showQuantity && quantity <= 0) return;
+        if (showQuantity && quantity === "") return;
         try {
           setSubmitting(true);
+          const qFinal =
+            showQuantity
+              ? Math.max(
+                  1,
+                  Math.min(
+                    maxQuantity,
+                    Number(quantity === "" ? 0 : quantity),
+                  ),
+                )
+              : undefined;
+
           await onSubmit({
             location: showLocation ? location : undefined,
-            quantity: showQuantity ? quantity : undefined,
+            quantity: qFinal,
             shipType,
           });
         } finally {
@@ -1361,9 +1372,12 @@ function ActionForm({
             type="number"
             min={1}
             max={Math.max(1, maxQuantity)}
-            value={quantity}
+            value={quantity === "" ? "" : quantity}
             disabled={submitting}
-            onChange={(e) => setQuantity(Number(e.target.value))}
+            onChange={(e) => {
+              const v = e.target.value;
+              setQuantity(v === "" ? "" : Number(v));
+            }}
             className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
           />
         </div>
