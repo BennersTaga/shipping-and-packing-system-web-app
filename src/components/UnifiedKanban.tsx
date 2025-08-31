@@ -35,12 +35,19 @@ type ArchiveItem = {
   ship: { type: ShipType; quantity: number; date: string };
 };
 
-// ===== 定数 =====
+// ===== API config / helpers =====
 const API_ENDPOINTS = {
   SEARCH_PACKING: "/api/packing/search",
   UPDATE_PACKING: "/api/packing/update",
 };
-const SHEET_LOG_NAME = "梱包&出荷";
+
+type Action = "pack" | "ship" | "move" | "restore";
+
+const toast = (msg: string) => {
+  if (typeof window !== "undefined") alert(msg);
+  console.error(msg);
+};
+
 const STORAGE_OPTIONS = [
   "パレット①",
   "パレット②",
@@ -168,7 +175,6 @@ export default function UnifiedKanbanPrototypeV2() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [bannerError, setBannerError] = useState<string | null>(null);
 
   // Kanban の並び（各列に属するカードID）
   const [columns, setColumns] = useState<Record<KanbanStatusId, string[]>>({
@@ -185,13 +191,6 @@ export default function UnifiedKanbanPrototypeV2() {
   const [archiveQuery, setArchiveQuery] = useState("");
   const [restoreTarget, setRestoreTarget] = useState<ArchiveItem | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (bannerError) {
-      const t = setTimeout(() => setBannerError(null), 3000);
-      return () => clearTimeout(t);
-    }
-  }, [bannerError]);
 
   // ==== データ取得 ====
   async function fetchData(override?: Partial<Filters>) {
@@ -430,30 +429,27 @@ export default function UnifiedKanbanPrototypeV2() {
         closeDialog();
         // ログ送信（必須：from/to/quantity + requestId）
         try {
-          await fetch(API_ENDPOINTS.UPDATE_PACKING, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "X-Request-Id": rid },
-            body: JSON.stringify({
-              action: "move",
-              rowIndex: item.rowIndex,
-              requestId: rid,
-              payload: {
-                from: item.packingInfo.location,
-                to,
-                quantity: movedQty,
-              },
-              log: {
-                sheet: SHEET_LOG_NAME,
-                when: filters.date || today,
-                type: "移動",
-                fromLocation: item.packingInfo.location,
-                toLocation: to,
-                location: to,
-                quantity: movedQty,
-              },
-            }),
+          await updatePacking({
+            action: "move",
+            rowIndex: item.rowIndex,
+            packingData: {
+              quantity: movedQty,
+              location: to,
+              from: item.packingInfo.location,
+              to,
+            },
+            log: {
+              when: new Date().toISOString(),
+              shipType: "",
+              user: "",
+              fromLocation: item.packingInfo.location,
+              toLocation: to,
+            },
+            requestId: rid,
           });
-        } catch {}
+        } catch (err) {
+          toast((err as Error).message);
+        }
       },
     });
   }
@@ -477,28 +473,24 @@ export default function UnifiedKanbanPrototypeV2() {
       shipped: prev.shipped.filter((id) => id !== before),
       stock: prev.stock.includes(after) ? prev.stock : [...prev.stock, after],
     }));
-    // 復帰ログ（restore）
     try {
       const rid = genRequestId();
-      await fetch(API_ENDPOINTS.UPDATE_PACKING, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Request-Id": rid },
-        body: JSON.stringify({
-          action: "restore",
-          rowIndex: item.rowIndex,
-          requestId: rid,
-          payload: { to: loc, quantity: q },
-          log: {
-            sheet: SHEET_LOG_NAME,
-            when: filters.date || today,
-            type: "復帰",
-            toLocation: loc,
-            location: loc,
-            quantity: q,
-          },
-        }),
+      await updatePacking({
+        action: "restore",
+        rowIndex: item.rowIndex,
+        packingData: { quantity: q, location: loc, to: loc },
+        log: {
+          when: new Date().toISOString(),
+          shipType: "",
+          user: "",
+          fromLocation: "",
+          toLocation: loc,
+        },
+        requestId: rid,
       });
-    } catch {}
+    } catch (err) {
+      toast((err as Error).message);
+    }
   }
 
   function restoreFromArchive(a: ArchiveItem) {
@@ -566,25 +558,22 @@ export default function UnifiedKanbanPrototypeV2() {
         ),
       }));
       try {
-        await fetch(API_ENDPOINTS.UPDATE_PACKING, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Request-Id": rid },
-          body: JSON.stringify({
-            action: "restore",
-            rowIndex: a.base.rowIndex,
-            requestId: rid,
-            payload: { to: loc, quantity: qty },
-            log: {
-              sheet: SHEET_LOG_NAME,
-              when: filters.date || today,
-              type: "復帰",
-              toLocation: loc,
-              location: loc,
-              quantity: qty,
-            },
-          }),
+        await updatePacking({
+          action: "restore",
+          rowIndex: a.base.rowIndex,
+          packingData: { quantity: qty, location: loc, to: loc },
+          log: {
+            when: new Date().toISOString(),
+            shipType: "",
+            user: "",
+            fromLocation: "",
+            toLocation: loc,
+          },
+          requestId: rid,
         });
-      } catch {}
+      } catch (err) {
+        toast((err as Error).message);
+      }
       finish(existingId);
       return;
     }
@@ -603,29 +592,51 @@ export default function UnifiedKanbanPrototypeV2() {
       return { ...prev, shipped: shippedIds, stock: nextStock };
     });
     try {
-      await fetch(API_ENDPOINTS.UPDATE_PACKING, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-Request-Id": rid },
-        body: JSON.stringify({
-          action: "restore",
-          rowIndex: a.base.rowIndex,
-          requestId: rid,
-          payload: { to: loc, quantity: qty },
-          log: {
-            sheet: SHEET_LOG_NAME,
-            when: filters.date || today,
-            type: "復帰",
-            toLocation: loc,
-            location: loc,
-            quantity: qty,
-          },
-        }),
+      await updatePacking({
+        action: "restore",
+        rowIndex: a.base.rowIndex,
+        packingData: { quantity: qty, location: loc, to: loc },
+        log: {
+          when: new Date().toISOString(),
+          shipType: "",
+          user: "",
+          fromLocation: "",
+          toLocation: loc,
+        },
+        requestId: rid,
       });
-    } catch {}
+    } catch (err) {
+      toast((err as Error).message);
+    }
     finish(newId);
   }
 
-  // ==== 操作実装（サーバ更新は tickets API を使用） ====
+  // ==== 操作実装 ====
+
+  async function updatePacking(payload: {
+    action: Action;
+    rowIndex: number;
+    packingData: Record<string, any>;
+    log: {
+      when: string;
+      shipType?: string;
+      user?: string;
+      fromLocation?: string;
+      toLocation?: string;
+    };
+    requestId: string;
+  }) {
+    const res = await fetch(API_ENDPOINTS.UPDATE_PACKING, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const resJson = await res.json().catch(() => null);
+    if (!res.ok || !resJson?.success) {
+      throw new Error(resJson?.error || res.statusText);
+    }
+  }
+
   async function doPack(
     item: PackingItem,
     payload: { location?: string; quantity?: number },
@@ -633,23 +644,27 @@ export default function UnifiedKanbanPrototypeV2() {
     const key = `${item.rowIndex}:pack`;
     if (inflightRef.current.has(key)) return;
     inflightRef.current.add(key);
+    const rid = genRequestId();
     try {
-      const res = await fetch(`/api/tickets/${item.rowIndex}/pack`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          qty: payload.quantity || 1,
-          storageLocation: payload.location,
-        }),
+      await updatePacking({
+        action: "pack",
+        rowIndex: item.rowIndex,
+        packingData: {
+          quantity: payload.quantity || 1,
+          location: payload.location?.trim(),
+        },
+        log: {
+          when: new Date().toISOString(),
+          shipType: "",
+          user: "",
+          fromLocation: "",
+          toLocation: payload.location?.trim() || "",
+        },
+        requestId: rid,
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: "API error" }));
-        setBannerError(err.error || "API error");
-        return;
-      }
       await fetchData();
-    } catch {
-      setBannerError("ネットワークエラー");
+    } catch (err) {
+      toast((err as Error).message);
     } finally {
       inflightRef.current.delete(key);
       closeDialog();
@@ -663,23 +678,29 @@ export default function UnifiedKanbanPrototypeV2() {
     const key = `${item.rowIndex}:ship`;
     if (inflightRef.current.has(key)) return;
     inflightRef.current.add(key);
+    const rid = genRequestId();
     try {
-      const res = await fetch(`/api/tickets/${item.rowIndex}/ship`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          qty: payload.quantity || 1,
-          shippingType: payload.shipType,
-        }),
+      await updatePacking({
+        action: "ship",
+        rowIndex: item.rowIndex,
+        packingData: {
+          quantity: payload.quantity || 1,
+          location: payload.location?.trim(),
+          from: item.packingInfo.location,
+          to: payload.location?.trim(),
+        },
+        log: {
+          when: new Date().toISOString(),
+          shipType: payload.shipType || "",
+          user: "",
+          fromLocation: item.packingInfo.location,
+          toLocation: payload.location?.trim() || "",
+        },
+        requestId: rid,
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: "API error" }));
-        setBannerError(err.error || "API error");
-        return;
-      }
       await fetchData();
-    } catch {
-      setBannerError("ネットワークエラー");
+    } catch (err) {
+      toast((err as Error).message);
     } finally {
       inflightRef.current.delete(key);
       closeDialog();
@@ -800,17 +821,7 @@ export default function UnifiedKanbanPrototypeV2() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-600 via-purple-700 to-purple-800 p-4 md:p-6">
-      {bannerError && (
-        <div className="fixed top-0 left-0 right-0 bg-red-600 text-white text-center py-2 z-50">
-          {bannerError}
-        </div>
-      )}
       <div className="max-w-7xl mx-auto">
-        {bannerError && (
-          <div className="mb-4 rounded bg-red-100 p-2 text-red-700">
-            {bannerError}
-          </div>
-        )}
         {/* ヘッダー */}
         <div className="bg-white/95 backdrop-blur-md rounded-2xl shadow-2xl p-6 md:p-8 mb-6">
           <div className="flex items-center justify-between gap-4">
@@ -1024,7 +1035,7 @@ export default function UnifiedKanbanPrototypeV2() {
       </div>
     </div>
   );
-}
+};
 
 // ===== Kanban Column =====
 function KanbanColumn({
