@@ -1,6 +1,7 @@
-# GAS 追記手順（`search_` に「出荷済み」カードを返す）
-1. Apps Script プロジェクトの `search_` 関数を開きます。
-2. 製造行ごとの在庫/未処理を push している for ループの末尾に以下を追記します。
+GAS 追記手順（search_ に「出荷済み」カードを返す）
+
+対象: Apps Script プロジェクトの search_ 関数
+場所: 製造行ごとの在庫/未処理を push している for ループの末尾
 
 ```js
 // ---- 出荷済み（合計）
@@ -20,3 +21,5 @@ if (by.shippedTotal > 0) {
   });
 }
 ```
+pgsql
+Copy code
