@@ -49,6 +49,9 @@ const toast = (msg: string) => {
   console.error(msg);
 };
 
+const NETWORK_ERROR_MESSAGE =
+  "通信エラーが発生しました。ネットワーク状況を確認し、ページを再読み込みしてください。";
+
 const STORAGE_OPTIONS = [
   "パレット①",
   "パレット②",
@@ -121,7 +124,7 @@ export function computeSplit(originalQty: number, moveQty: number) {
   return { remain: o - m, move: m };
 }
 
-function normalizeLocation(raw: string) {
+function normalizeLocation(raw: string): { key: string; label: string } {
   const circled: Record<string, string> = {
     "①": "1",
     "②": "2",
@@ -143,16 +146,17 @@ function normalizeLocation(raw: string) {
     .replace(/[①②③④⑤⑥⑦⑧⑨⑩]/g, (m) => circled[m])
     .replace(/\s+/g, " ");
   if (/^仮置きパレット/.test(v)) {
-    return { key: "tmp", label: "仮置きパレット" };
+    return { key: "pallet-temp", label: "仮置きパレット" };
   }
-  const m = v.match(/^パレット\s*(\d+)/);
+  const m = v.match(/^パレット\s*(\d{1,2})/);
   if (m) {
     const n = m[1];
-    return { key: `palet${n}`, label: `パレット${n}` };
+    return { key: `pallet-${n}`, label: `パレット${n}` };
   }
+  const label = v.trim();
   return {
-    key: v.toLowerCase(),
-    label: v.trim(),
+    key: label.replace(/\s+/g, "-").toLowerCase(),
+    label,
   };
 }
 
@@ -256,7 +260,7 @@ export default function UnifiedKanbanPrototypeV2() {
       let archives: ArchiveItem[] = [];
       let masters: string[] = [];
       try {
-        const res = await fetch(
+        const res = await fetchWithRetry(
           `${API_ENDPOINTS.SEARCH_PACKING}?${params.toString()}`,
           { cache: "no-store" },
         );
@@ -278,16 +282,20 @@ export default function UnifiedKanbanPrototypeV2() {
       const locMap = new Map<string, string>();
       for (const raw of masters.length ? masters : STORAGE_OPTIONS) {
         const { key, label } = normalizeLocation(raw);
-        if (!locMap.has(key)) locMap.set(key, label);
+        if (label && !locMap.has(key)) locMap.set(key, label);
       }
-      setLocationOptions(Array.from(locMap.values()));
 
       const processed: PackingItem[] = [];
       const stockGroups = new Map<string, PackingItem>();
       for (const it of data || []) {
+        const loc = normalizeLocation(it.packingInfo?.location || "");
+        if (loc.label && !locMap.has(loc.key)) locMap.set(loc.key, loc.label);
+        const normalized: PackingItem = {
+          ...it,
+          packingInfo: { ...it.packingInfo, location: loc.label },
+        };
         if (it.status === "完了") {
           const stockQty = Number(it.packingInfo?.quantity || 0);
-          const loc = normalizeLocation(it.packingInfo?.location || "");
           const key = `${it.rowIndex}|${loc.key}`;
           const g = stockGroups.get(key);
           if (g) {
@@ -295,20 +303,23 @@ export default function UnifiedKanbanPrototypeV2() {
             g.packingInfo.quantity = String(g.stockQty);
           } else {
             stockGroups.set(key, {
-              ...it,
+              ...normalized,
               packingInfo: {
-                ...it.packingInfo,
-                location: loc.label,
+                ...normalized.packingInfo,
                 quantity: String(stockQty),
               },
               stockQty,
             });
           }
         } else {
-          processed.push(it);
+          processed.push(normalized);
         }
       }
       processed.push(...Array.from(stockGroups.values()));
+
+      setLocationOptions(
+        Array.from(locMap.values()).sort((a, b) => a.localeCompare(b)),
+      );
 
       const nextCards: Record<string, PackingItem> = {};
       const col: Record<KanbanStatusId, string[]> = {
@@ -504,9 +515,11 @@ export default function UnifiedKanbanPrototypeV2() {
             }));
             setColumns((prev) => ({ ...prev, stock: [...prev.stock, newId] }));
           }
+          await fetchData();
           closeDialog();
         } catch (err) {
-          toast((err as Error).message);
+          const msg = (err as Error).message;
+          if (msg !== NETWORK_ERROR_MESSAGE) toast(msg);
         }
       },
     });
@@ -548,7 +561,8 @@ export default function UnifiedKanbanPrototypeV2() {
         requestId: rid,
       });
     } catch (err) {
-      toast((err as Error).message);
+      const msg = (err as Error).message;
+      if (msg !== NETWORK_ERROR_MESSAGE) toast(msg);
     }
   }
 
@@ -632,7 +646,8 @@ export default function UnifiedKanbanPrototypeV2() {
           requestId: rid,
         });
       } catch (err) {
-        toast((err as Error).message);
+        const msg = (err as Error).message;
+        if (msg !== NETWORK_ERROR_MESSAGE) toast(msg);
       }
       finish(existingId);
       return;
@@ -666,46 +681,38 @@ export default function UnifiedKanbanPrototypeV2() {
         requestId: rid,
       });
     } catch (err) {
-      toast((err as Error).message);
+      const msg = (err as Error).message;
+      if (msg !== NETWORK_ERROR_MESSAGE) toast(msg);
     }
     finish(newId);
   }
 
   // ==== 操作実装 ====
 
-  async function postWithRetry(url: string, payload: any) {
-    const delays = [400, 800, 1600];
-    let lastErr: Error | null = null;
-    for (let i = 0; i < delays.length; i++) {
+  async function fetchWithRetry(
+    url: string,
+    options: RequestInit = {},
+  ): Promise<Response> {
+    const delays = [300, 600, 1200];
+    for (let i = 0; i < 3; i++) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 10000);
       try {
-        const res = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-          signal: controller.signal,
-        });
+        const res = await fetch(url, { ...options, signal: controller.signal });
         clearTimeout(timer);
-        const j = await res.json().catch(() => null);
-        if (!res.ok || !j?.success) {
-          throw new Error(j?.error || res.statusText);
-        }
-        return j;
-      } catch (e: any) {
+        if (!res.ok) throw new Error(res.statusText);
+        return res;
+      } catch (e) {
         clearTimeout(timer);
-        lastErr =
-          e instanceof TypeError || e.name === "AbortError"
-            ? new Error(
-                "通信に失敗しました。ネットワーク状態を確認して再度お試しください。",
-              )
-            : e;
-        if (i < delays.length - 1) {
+        if (i < 2) {
           await new Promise((r) => setTimeout(r, delays[i]));
+        } else {
+          alert(NETWORK_ERROR_MESSAGE);
+          throw new Error(NETWORK_ERROR_MESSAGE);
         }
       }
     }
-    throw lastErr;
+    throw new Error(NETWORK_ERROR_MESSAGE);
   }
 
   async function updatePacking(payload: {
@@ -721,7 +728,15 @@ export default function UnifiedKanbanPrototypeV2() {
     };
     requestId: string;
   }) {
-    await postWithRetry(API_ENDPOINTS.UPDATE_PACKING, payload);
+    const res = await fetchWithRetry(API_ENDPOINTS.UPDATE_PACKING, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const j = await res.json().catch(() => null);
+    if (!j?.success) {
+      throw new Error(j?.error || res.statusText);
+    }
   }
 
   async function doPack(
@@ -753,7 +768,8 @@ export default function UnifiedKanbanPrototypeV2() {
       await fetchData();
       closeDialog();
     } catch (err) {
-      toast((err as Error).message);
+      const msg = (err as Error).message;
+      if (msg !== NETWORK_ERROR_MESSAGE) toast(msg);
     } finally {
       inflightRef.current.delete(key);
     }
@@ -791,7 +807,8 @@ export default function UnifiedKanbanPrototypeV2() {
       await fetchData();
       closeDialog();
     } catch (err) {
-      toast((err as Error).message);
+      const msg = (err as Error).message;
+      if (msg !== NETWORK_ERROR_MESSAGE) toast(msg);
     } finally {
       inflightRef.current.delete(key);
     }
