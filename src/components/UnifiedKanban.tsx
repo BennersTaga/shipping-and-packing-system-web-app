@@ -123,24 +123,14 @@ export function computeSplit(originalQty: number, moveQty: number) {
 
 function normalizeLocation(raw: string) {
   const circled: Record<string, string> = {
-    "①": "1",
-    "②": "2",
-    "③": "3",
-    "④": "4",
-    "⑤": "5",
-    "⑥": "6",
-    "⑦": "7",
-    "⑧": "8",
-    "⑨": "9",
-    "⑩": "10",
+    "①": "1","②": "2","③": "3","④": "4","⑤": "5",
+    "⑥": "6","⑦": "7","⑧": "8","⑨": "9","⑩": "10",
   };
   let v = String(raw || "")
     .trim()
     .normalize("NFKC")
-    .replace(/[①-⑨]|⑩/g, (c) => circled[c] ?? c)
-    .replace(/[０-９]/g, (d) =>
-      String.fromCharCode(d.charCodeAt(0) - 0xff10 + 0x30),
-    )
+    .replace(/[①②③④⑤⑥⑦⑧⑨⑩]/g, (m) => circled[m])
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
     .replace(/（[^）]*）/g, "")
     .replace(/\s+/g, "");
   if (/^パレット(\d+)/.test(v)) {
@@ -215,6 +205,7 @@ export default function UnifiedKanbanPrototypeV2() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [locationOptions, setLocationOptions] = useState(STORAGE_OPTIONS);
 
   // Kanban の並び（各列に属するカードID）
   const [columns, setColumns] = useState<Record<KanbanStatusId, string[]>>({
@@ -257,6 +248,7 @@ export default function UnifiedKanbanPrototypeV2() {
 
       let data: PackingItem[] | null = null;
       let archives: ArchiveItem[] = [];
+      let masters: string[] = [];
       try {
         const res = await fetch(
           `${API_ENDPOINTS.SEARCH_PACKING}?${params.toString()}`,
@@ -266,12 +258,22 @@ export default function UnifiedKanbanPrototypeV2() {
         if (j?.success) {
           data = (j.data as PackingItem[]) || [];
           archives = (j.archive as ArchiveItem[]) || [];
+          masters = Array.isArray(j.masters?.locations)
+            ? (j.masters.locations as string[])
+            : masters;
         } else {
           throw new Error(j?.error || "検索に失敗しました");
         }
       } catch {
         data = buildMockData(f.date);
       }
+
+      const locMap = new Map<string, string>();
+      for (const raw of masters.length ? masters : STORAGE_OPTIONS) {
+        const { key, label } = normalizeLocation(raw);
+        if (!locMap.has(key)) locMap.set(key, label);
+      }
+      setLocationOptions(Array.from(locMap.values()));
 
       const processed: PackingItem[] = [];
       const stockGroups = new Map<string, PackingItem>();
@@ -429,7 +431,7 @@ export default function UnifiedKanbanPrototypeV2() {
       item,
       origin,
       onSubmit: async (p) => {
-        const to = (p.location || "").trim();
+        const to = normalizeLocation(p.location || "").label;
         if (!to) return;
         const cur = Math.max(
           0,
@@ -697,19 +699,20 @@ export default function UnifiedKanbanPrototypeV2() {
     inflightRef.current.add(key);
     const rid = genRequestId();
     try {
+      const loc = normalizeLocation(payload.location || "").label;
       await updatePacking({
         action: "pack",
         rowIndex: item.rowIndex,
         packingData: {
           quantity: payload.quantity || 1,
-          location: payload.location?.trim(),
+          location: loc,
         },
         log: {
           when: new Date().toISOString(),
           shipType: "",
           user: "",
           fromLocation: "",
-          toLocation: payload.location?.trim() || "",
+          toLocation: loc,
         },
         requestId: rid,
       });
@@ -834,7 +837,7 @@ export default function UnifiedKanbanPrototypeV2() {
         "[TEST] mock data closed array",
       );
       console.assert(
-        STORAGE_OPTIONS.length === 9 && STORAGE_OPTIONS[0].includes("パレット"),
+        locationOptions.length > 0,
         "[TEST] storage options ready",
       );
       const item2 = md[1];
@@ -1044,7 +1047,7 @@ export default function UnifiedKanbanPrototypeV2() {
               useSelectLocation={currentDialog.mode !== "ship"}
               showLocation={currentDialog.mode !== "ship" || origin === "stock"}
               showQuantity={true}
-              locationOptions={STORAGE_OPTIONS}
+              locationOptions={locationOptions}
               shipTypeOptions={["ロジカム出荷", "羽野出荷"]}
               onCancel={closeDialog}
               onSubmit={(payload) => currentDialog.onSubmit?.(payload)}
@@ -1065,7 +1068,7 @@ export default function UnifiedKanbanPrototypeV2() {
               useSelectLocation={true}
               showLocation={true}
               showQuantity={true}
-              locationOptions={STORAGE_OPTIONS}
+              locationOptions={locationOptions}
               shipTypeOptions={["ロジカム出荷", "羽野出荷"]}
               onCancel={() => setRestoreTarget(null)}
               onSubmit={async (p) => {
