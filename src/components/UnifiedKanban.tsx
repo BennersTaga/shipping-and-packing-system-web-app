@@ -18,13 +18,14 @@ export type PackingItem = {
   origin: string;
   quantity: number; // 製造数量（ベース）
   manufactureProduct: string;
-  status: "未処理" | "完了"; // 既存互換
+  status: "未処理" | "完了" | "出荷済み"; // 既存互換
   packingInfo: {
     location: string;
     quantity: string;
     date?: string;
     user?: string;
   };
+  stockQty?: number;
 };
 
 type ShipType = "ロジカム出荷" | "羽野出荷";
@@ -110,6 +111,7 @@ export function computeRestoredItem(
       quantity: String(qty),
     },
     status: "完了",
+    stockQty: qty,
   };
 }
 
@@ -226,6 +228,37 @@ export default function UnifiedKanbanPrototypeV2() {
         data = buildMockData(f.date);
       }
 
+      const normalizeLocation = (v: string) =>
+        String(v || "").trim().normalize("NFKC");
+      const processed: PackingItem[] = [];
+      const stockGroups = new Map<string, PackingItem>();
+      for (const it of data || []) {
+        if (it.status === "完了") {
+          const stockQty =
+            Number(it.packingInfo?.quantity ?? it.quantity ?? 0) || 0;
+          const loc = normalizeLocation(it.packingInfo?.location);
+          const key = `${it.rowIndex}|${loc}`;
+          const g = stockGroups.get(key);
+          if (g) {
+            g.stockQty = (g.stockQty || 0) + stockQty;
+            g.packingInfo.quantity = String(g.stockQty);
+          } else {
+            stockGroups.set(key, {
+              ...it,
+              packingInfo: {
+                ...it.packingInfo,
+                location: loc,
+                quantity: String(stockQty),
+              },
+              stockQty,
+            });
+          }
+        } else {
+          processed.push(it);
+        }
+      }
+      processed.push(...Array.from(stockGroups.values()));
+
       const nextCards: Record<string, PackingItem> = {};
       const col: Record<KanbanStatusId, string[]> = {
         manufactured: [],
@@ -233,9 +266,13 @@ export default function UnifiedKanbanPrototypeV2() {
         shipped: [],
       };
 
-      for (const it of data) {
+      for (const it of processed) {
         const uiStatus: KanbanStatusId =
-          it.status === "未処理" ? "manufactured" : "stock";
+          it.status === "未処理"
+            ? "manufactured"
+            : it.status === "出荷済み"
+              ? "shipped"
+              : "stock";
         const id = makeId(it);
         nextCards[id] = it;
         col[uiStatus].push(id);
@@ -409,6 +446,7 @@ export default function UnifiedKanbanPrototypeV2() {
           const updatedOrigin: PackingItem = {
             ...item,
             packingInfo: { ...item.packingInfo, quantity: String(remain) },
+            stockQty: remain,
           };
           const moved: PackingItem = {
             ...item,
@@ -417,6 +455,7 @@ export default function UnifiedKanbanPrototypeV2() {
               location: to,
               quantity: String(move),
             },
+            stockQty: move,
           };
           const newId = makeId(moved);
           setCards((prev) => ({
@@ -549,6 +588,7 @@ export default function UnifiedKanbanPrototypeV2() {
       const updated: PackingItem = {
         ...current,
         packingInfo: { ...current.packingInfo, quantity: String(nextQty) },
+        stockQty: nextQty,
       };
       setCards((prev) => ({ ...prev, [existingId]: updated }));
       setColumns((prev) => ({
@@ -1160,7 +1200,7 @@ function KanbanCard({
         </div>
         {columnId === "stock" && (
           <span className="inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
-            在庫 {item.packingInfo.quantity || item.quantity} 個
+            在庫 {item.stockQty ?? item.quantity} 個
           </span>
         )}
       </div>
@@ -1178,7 +1218,10 @@ function KanbanCard({
 
         {/* 3行目：数量 / 製造商品 */}
         <div className="grid grid-cols-2 gap-3">
-          <Field k="数量" v={`${item.quantity} 個`} />
+          <Field
+            k="数量"
+            v={`${columnId === "stock" ? item.stockQty ?? item.quantity : item.quantity} 個`}
+          />
           <Field k="製造商品" v={item.manufactureProduct || "-"} />
         </div>
 
