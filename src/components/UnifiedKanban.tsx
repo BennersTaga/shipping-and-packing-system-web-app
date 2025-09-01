@@ -123,21 +123,21 @@ export function computeSplit(originalQty: number, moveQty: number) {
 
 function normalizeLocation(raw: string) {
   const circled: Record<string, string> = {
-    ①: "1",
-    ②: "2",
-    ③: "3",
-    ④: "4",
-    ⑤: "5",
-    ⑥: "6",
-    ⑦: "7",
-    ⑧: "8",
-    ⑨: "9",
-    ⑩: "10",
+    "①": "1",
+    "②": "2",
+    "③": "3",
+    "④": "4",
+    "⑤": "5",
+    "⑥": "6",
+    "⑦": "7",
+    "⑧": "8",
+    "⑨": "9",
+    "⑩": "10",
   };
   let v = String(raw || "")
     .trim()
     .normalize("NFKC")
-    .replace(/[①②③④⑤⑥⑦⑧⑨⑩]/g, (c) => circled[c])
+    .replace(/[①-⑨]|⑩/g, (c) => circled[c] ?? c)
     .replace(/[０-９]/g, (d) =>
       String.fromCharCode(d.charCodeAt(0) - 0xff10 + 0x30),
     )
