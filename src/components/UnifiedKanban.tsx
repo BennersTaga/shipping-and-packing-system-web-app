@@ -216,8 +216,6 @@ export default function UnifiedKanbanPrototypeV2() {
   // カード辞書（id -> item）
   const [cards, setCards] = useState<Record<string, PackingItem>>({});
 
-  const [hasShipped, setHasShipped] = useState(false);
-
   // 出荷アーカイブ
   const [archive, setArchive] = useState<ArchiveItem[]>([]);
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -266,6 +264,7 @@ export default function UnifiedKanbanPrototypeV2() {
         }
       } catch {
         data = buildMockData(f.date);
+        archives = [];
       }
 
       const locMap = new Map<string, string>();
@@ -325,7 +324,6 @@ export default function UnifiedKanbanPrototypeV2() {
 
       setCards(nextCards);
       setColumns(col);
-      setHasShipped(col.shipped.length > 0);
       setArchive(archives);
     } catch (e: any) {
       setError(e.message || "読み込みエラー");
@@ -1002,12 +1000,10 @@ export default function UnifiedKanbanPrototypeV2() {
         ) : (
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
             <div
-              className={`grid grid-cols-1 ${
-                hasShipped ? "md:grid-cols-3" : "md:grid-cols-2"
-              } gap-4`}
+              className="grid grid-cols-1 md:grid-cols-3 gap-4"
               style={{ gridAutoFlow: "column", overflowX: "auto" }}
             >
-              {(hasShipped ? K_STATUSES : K_STATUSES.filter((c) => c.id !== "shipped")).map((col) => (
+              {K_STATUSES.map((col) => (
                 <KanbanColumn
                   key={col.id}
                   id={col.id as KanbanStatusId}
