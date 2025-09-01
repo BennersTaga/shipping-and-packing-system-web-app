@@ -123,29 +123,36 @@ export function computeSplit(originalQty: number, moveQty: number) {
 
 function normalizeLocation(raw: string) {
   const circled: Record<string, string> = {
-    "①": "1","②": "2","③": "3","④": "4","⑤": "5",
-    "⑥": "6","⑦": "7","⑧": "8","⑨": "9","⑩": "10",
+    "①": "1",
+    "②": "2",
+    "③": "3",
+    "④": "4",
+    "⑤": "5",
+    "⑥": "6",
+    "⑦": "7",
+    "⑧": "8",
+    "⑨": "9",
+    "⑩": "10",
   };
   let v = String(raw || "")
     .trim()
     .normalize("NFKC")
+    .replace(/[０-９]/g, (c) =>
+      String.fromCharCode(c.charCodeAt(0) - 0xfEE0),
+    )
     .replace(/[①②③④⑤⑥⑦⑧⑨⑩]/g, (m) => circled[m])
-    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
-    .replace(/（[^）]*）/g, "")
-    .replace(/\s+/g, "");
-  if (/^パレット(\d+)/.test(v)) {
-    const n = RegExp.$1;
+    .replace(/\s+/g, " ");
+  if (/^仮置きパレット/.test(v)) {
+    return { key: "tmp", label: "仮置きパレット" };
+  }
+  const m = v.match(/^パレット\s*(\d+)/);
+  if (m) {
+    const n = m[1];
     return { key: `palet${n}`, label: `パレット${n}` };
   }
-  if (v.startsWith("仮置き")) {
-    return { key: "kariokipalet", label: "仮置きパレット" };
-  }
   return {
-    key: v
-      .toLowerCase()
-      .replace(/パレット/g, "palet")
-      .replace(/仮置き/g, "karioki"),
-    label: v,
+    key: v.toLowerCase(),
+    label: v.trim(),
   };
 }
 
@@ -234,6 +241,7 @@ export default function UnifiedKanbanPrototypeV2() {
       const legacyStatusMap: Record<string, string> = {
         manufactured: "未処理",
         stock: "完了",
+        shipped: "出荷済み",
       };
 
       const params = new URLSearchParams();
@@ -278,8 +286,7 @@ export default function UnifiedKanbanPrototypeV2() {
       const stockGroups = new Map<string, PackingItem>();
       for (const it of data || []) {
         if (it.status === "完了") {
-          const stockQty =
-            Number(it.packingInfo?.quantity ?? it.quantity ?? 0) || 0;
+          const stockQty = Number(it.packingInfo?.quantity || 0);
           const loc = normalizeLocation(it.packingInfo?.location || "");
           const key = `${it.rowIndex}|${loc.key}`;
           const g = stockGroups.get(key);
@@ -429,8 +436,8 @@ export default function UnifiedKanbanPrototypeV2() {
       item,
       origin,
       onSubmit: async (p) => {
-        const to = normalizeLocation(p.location || "").label;
-        if (!to) return;
+        const to = normalizeLocation(p.location || "");
+        if (!to.label) return;
         const cur = Math.max(
           0,
           parseInt(item.packingInfo.quantity || "0", 10) || 0,
@@ -438,65 +445,66 @@ export default function UnifiedKanbanPrototypeV2() {
         const { remain, move } = computeSplit(cur, p.quantity || cur);
         const movedQty = Math.max(1, Math.min(p.quantity || cur, cur));
         const rid = genRequestId();
-        if (move === cur) {
-          // 全量移動（IDも更新）
-          const { beforeId, afterId, updated } = computeAfterMove(item, to);
-          setCards((prev) => {
-            const n = { ...prev };
-            delete n[beforeId];
-            n[afterId] = updated;
-            return n;
-          });
-          setColumns((prev) => ({
-            ...prev,
-            stock: prev.stock.map((id) => (id === beforeId ? afterId : id)),
-          }));
-        } else {
-          // 分割：元を減算し、新カードを追加
-          const beforeId = makeId(item);
-          const updatedOrigin: PackingItem = {
-            ...item,
-            packingInfo: { ...item.packingInfo, quantity: String(remain) },
-            stockQty: remain,
-          };
-          const moved: PackingItem = {
-            ...item,
-            packingInfo: {
-              ...item.packingInfo,
-              location: to,
-              quantity: String(move),
-            },
-            stockQty: move,
-          };
-          const newId = makeId(moved);
-          setCards((prev) => ({
-            ...prev,
-            [beforeId]: updatedOrigin,
-            [newId]: moved,
-          }));
-          setColumns((prev) => ({ ...prev, stock: [...prev.stock, newId] }));
-        }
-        closeDialog();
-        // ログ送信（必須：from/to/quantity + requestId）
         try {
+          const from = normalizeLocation(item.packingInfo.location || "");
           await updatePacking({
             action: "move",
             rowIndex: item.rowIndex,
             packingData: {
               quantity: movedQty,
-              location: to,
-              from: item.packingInfo.location,
-              to,
+              location: to.label,
+              from: from.label,
+              to: to.label,
             },
             log: {
               when: new Date().toISOString(),
               shipType: "",
               user: "",
-              fromLocation: item.packingInfo.location,
-              toLocation: to,
+              fromLocation: from.label,
+              toLocation: to.label,
             },
             requestId: rid,
           });
+          if (move === cur) {
+            const { beforeId, afterId, updated } = computeAfterMove(
+              item,
+              to.label,
+            );
+            setCards((prev) => {
+              const n = { ...prev };
+              delete n[beforeId];
+              n[afterId] = updated;
+              return n;
+            });
+            setColumns((prev) => ({
+              ...prev,
+              stock: prev.stock.map((id) => (id === beforeId ? afterId : id)),
+            }));
+          } else {
+            const beforeId = makeId(item);
+            const updatedOrigin: PackingItem = {
+              ...item,
+              packingInfo: { ...item.packingInfo, quantity: String(remain) },
+              stockQty: remain,
+            };
+            const moved: PackingItem = {
+              ...item,
+              packingInfo: {
+                ...item.packingInfo,
+                location: to.label,
+                quantity: String(move),
+              },
+              stockQty: move,
+            };
+            const newId = makeId(moved);
+            setCards((prev) => ({
+              ...prev,
+              [beforeId]: updatedOrigin,
+              [newId]: moved,
+            }));
+            setColumns((prev) => ({ ...prev, stock: [...prev.stock, newId] }));
+          }
+          closeDialog();
         } catch (err) {
           toast((err as Error).message);
         }
@@ -507,10 +515,11 @@ export default function UnifiedKanbanPrototypeV2() {
   async function requestRestoreFromShipped(item: PackingItem) {
     const qtyStr = prompt("在庫へ戻す数量", "1");
     const q = Math.max(1, parseInt(qtyStr || "0", 10) || 0);
-    const loc = prompt("戻す保管場所", item.packingInfo.location || "");
-    if (!loc) return;
+    const locRaw = prompt("戻す保管場所", item.packingInfo.location || "");
+    const loc = normalizeLocation(locRaw || "");
+    if (!loc.label) return;
     const before = makeId(item);
-    const updated: PackingItem = computeRestoredItem(item, loc, q);
+    const updated: PackingItem = computeRestoredItem(item, loc.label, q);
     const after = makeId(updated);
     setCards((prev) => {
       const n = { ...prev };
@@ -528,13 +537,13 @@ export default function UnifiedKanbanPrototypeV2() {
       await updatePacking({
         action: "restore",
         rowIndex: item.rowIndex,
-        packingData: { quantity: q, location: loc, to: loc },
+        packingData: { quantity: q, location: loc.label, to: loc.label },
         log: {
           when: new Date().toISOString(),
           shipType: "",
           user: "",
           fromLocation: "",
-          toLocation: loc,
+          toLocation: loc.label,
         },
         requestId: rid,
       });
@@ -552,8 +561,8 @@ export default function UnifiedKanbanPrototypeV2() {
     a: ArchiveItem,
     payload: { location?: string; quantity?: number },
   ) {
-    const loc = (payload.location || "").trim();
-    if (!loc) return;
+    const loc = normalizeLocation(payload.location || "");
+    if (!loc.label) return;
     const qty = Math.max(
       1,
       Math.min(a.ship.quantity, payload.quantity || a.ship.quantity),
@@ -584,7 +593,7 @@ export default function UnifiedKanbanPrototypeV2() {
       return (
         it &&
         it.rowIndex === a.base.rowIndex &&
-        (it.packingInfo.location || "") === loc &&
+        (it.packingInfo.location || "") === loc.label &&
         columns.stock.includes(id)
       );
     });
@@ -612,13 +621,13 @@ export default function UnifiedKanbanPrototypeV2() {
         await updatePacking({
           action: "restore",
           rowIndex: a.base.rowIndex,
-          packingData: { quantity: qty, location: loc, to: loc },
+          packingData: { quantity: qty, location: loc.label, to: loc.label },
           log: {
             when: new Date().toISOString(),
             shipType: "",
             user: "",
             fromLocation: "",
-            toLocation: loc,
+            toLocation: loc.label,
           },
           requestId: rid,
         });
@@ -630,7 +639,7 @@ export default function UnifiedKanbanPrototypeV2() {
     }
 
     // 新規在庫カードとして追加
-    const updated = computeRestoredItem(a.base, loc, qty);
+    const updated = computeRestoredItem(a.base, loc.label, qty);
     const newId = makeId(updated);
     setCards((prev) => ({ ...prev, [newId]: updated }));
     setColumns((prev) => {
@@ -646,13 +655,13 @@ export default function UnifiedKanbanPrototypeV2() {
       await updatePacking({
         action: "restore",
         rowIndex: a.base.rowIndex,
-        packingData: { quantity: qty, location: loc, to: loc },
+        packingData: { quantity: qty, location: loc.label, to: loc.label },
         log: {
           when: new Date().toISOString(),
           shipType: "",
           user: "",
           fromLocation: "",
-          toLocation: loc,
+          toLocation: loc.label,
         },
         requestId: rid,
       });
@@ -663,6 +672,41 @@ export default function UnifiedKanbanPrototypeV2() {
   }
 
   // ==== 操作実装 ====
+
+  async function postWithRetry(url: string, payload: any) {
+    const delays = [400, 800, 1600];
+    let lastErr: Error | null = null;
+    for (let i = 0; i < delays.length; i++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 10000);
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+        const j = await res.json().catch(() => null);
+        if (!res.ok || !j?.success) {
+          throw new Error(j?.error || res.statusText);
+        }
+        return j;
+      } catch (e: any) {
+        clearTimeout(timer);
+        lastErr =
+          e instanceof TypeError || e.name === "AbortError"
+            ? new Error(
+                "通信に失敗しました。ネットワーク状態を確認して再度お試しください。",
+              )
+            : e;
+        if (i < delays.length - 1) {
+          await new Promise((r) => setTimeout(r, delays[i]));
+        }
+      }
+    }
+    throw lastErr;
+  }
 
   async function updatePacking(payload: {
     action: Action;
@@ -677,15 +721,7 @@ export default function UnifiedKanbanPrototypeV2() {
     };
     requestId: string;
   }) {
-    const res = await fetch(API_ENDPOINTS.UPDATE_PACKING, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const resJson = await res.json().catch(() => null);
-    if (!res.ok || !resJson?.success) {
-      throw new Error(resJson?.error || res.statusText);
-    }
+    await postWithRetry(API_ENDPOINTS.UPDATE_PACKING, payload);
   }
 
   async function doPack(
@@ -697,29 +733,29 @@ export default function UnifiedKanbanPrototypeV2() {
     inflightRef.current.add(key);
     const rid = genRequestId();
     try {
-      const loc = normalizeLocation(payload.location || "").label;
+      const loc = normalizeLocation(payload.location || "");
       await updatePacking({
         action: "pack",
         rowIndex: item.rowIndex,
         packingData: {
           quantity: payload.quantity || 1,
-          location: loc,
+          location: loc.label,
         },
         log: {
           when: new Date().toISOString(),
           shipType: "",
           user: "",
           fromLocation: "",
-          toLocation: loc,
+          toLocation: loc.label,
         },
         requestId: rid,
       });
       await fetchData();
+      closeDialog();
     } catch (err) {
       toast((err as Error).message);
     } finally {
       inflightRef.current.delete(key);
-      closeDialog();
     }
   }
 
@@ -732,30 +768,32 @@ export default function UnifiedKanbanPrototypeV2() {
     inflightRef.current.add(key);
     const rid = genRequestId();
     try {
+      const to = normalizeLocation(payload.location || "");
+      const from = normalizeLocation(item.packingInfo.location || "");
       await updatePacking({
         action: "ship",
         rowIndex: item.rowIndex,
         packingData: {
           quantity: payload.quantity || 1,
-          location: payload.location?.trim(),
-          from: item.packingInfo.location,
-          to: payload.location?.trim(),
+          location: to.label,
+          from: from.label,
+          to: to.label,
         },
         log: {
           when: new Date().toISOString(),
           shipType: payload.shipType || "",
           user: "",
-          fromLocation: item.packingInfo.location,
-          toLocation: payload.location?.trim() || "",
+          fromLocation: from.label,
+          toLocation: to.label,
         },
         requestId: rid,
       });
       await fetchData();
+      closeDialog();
     } catch (err) {
       toast((err as Error).message);
     } finally {
       inflightRef.current.delete(key);
-      closeDialog();
     }
   }
 
@@ -1400,11 +1438,14 @@ function ActionForm({
               className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
             >
               <option value="">選択してください</option>
-              {locationOptions.map((opt) => (
-                <option key={opt} value={opt}>
-                  {opt}
-                </option>
-              ))}
+              {locationOptions.map((opt) => {
+                const { label } = normalizeLocation(opt);
+                return (
+                  <option key={label} value={label}>
+                    {label}
+                  </option>
+                );
+              })}
             </select>
           ) : (
             <input
