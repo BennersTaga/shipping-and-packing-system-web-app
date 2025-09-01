@@ -1,5 +1,4 @@
-# GAS 追記（search_ に出荷済みカードを返す）
-
+# GAS 追記手順（`search_` に「出荷済み」カードを返す）
 対象: Apps Script プロジェクトの `search_` 関数  
 場所: 製造行ごとの在庫/未処理を push している for ループの末尾
 
@@ -21,4 +20,3 @@ if (by.shippedTotal > 0) {
   });
 }
 ```
-

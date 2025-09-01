@@ -121,6 +121,44 @@ export function computeSplit(originalQty: number, moveQty: number) {
   return { remain: o - m, move: m };
 }
 
+function normalizeLocation(raw: string) {
+  const circled: Record<string, string> = {
+    "①": "1",
+    "②": "2",
+    "③": "3",
+    "④": "4",
+    "⑤": "5",
+    "⑥": "6",
+    "⑦": "7",
+    "⑧": "8",
+    "⑨": "9",
+    "⑩": "10",
+  };
+  let v = String(raw || "")
+    .trim()
+    .normalize("NFKC")
+    .replace(/[①-⑨]|⑩/g, (c) => circled[c] ?? c)
+    .replace(/[０-９]/g, (d) =>
+      String.fromCharCode(d.charCodeAt(0) - 0xff10 + 0x30),
+    )
+    .replace(/（[^）]*）/g, "")
+    .replace(/\s+/g, "");
+  if (/^パレット(\d+)/.test(v)) {
+    const n = RegExp.$1;
+    return { key: `palet${n}`, label: `パレット${n}` };
+  }
+  if (v.startsWith("仮置き")) {
+    return { key: "kariokipalet", label: "仮置きパレット" };
+  }
+  return {
+    key: v
+      .toLowerCase()
+      .replace(/パレット/g, "palet")
+      .replace(/仮置き/g, "karioki"),
+    label: v,
+  };
+}
+
 function buildMockData(date: string): PackingItem[] {
   return [
     {
@@ -187,6 +225,8 @@ export default function UnifiedKanbanPrototypeV2() {
   // カード辞書（id -> item）
   const [cards, setCards] = useState<Record<string, PackingItem>>({});
 
+  const [hasShipped, setHasShipped] = useState(false);
+
   // 出荷アーカイブ
   const [archive, setArchive] = useState<ArchiveItem[]>([]);
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -216,28 +256,31 @@ export default function UnifiedKanbanPrototypeV2() {
       if (f.quantityMax) params.append("quantityMax", f.quantityMax);
 
       let data: PackingItem[] | null = null;
+      let archives: ArchiveItem[] = [];
       try {
         const res = await fetch(
           `${API_ENDPOINTS.SEARCH_PACKING}?${params.toString()}`,
           { cache: "no-store" },
         );
         const j = await res.json();
-        if (j?.success) data = (j.data as PackingItem[]) || [];
-        else throw new Error(j?.error || "検索に失敗しました");
+        if (j?.success) {
+          data = (j.data as PackingItem[]) || [];
+          archives = (j.archive as ArchiveItem[]) || [];
+        } else {
+          throw new Error(j?.error || "検索に失敗しました");
+        }
       } catch {
         data = buildMockData(f.date);
       }
 
-      const normalizeLocation = (v: string) =>
-        String(v || "").trim().normalize("NFKC");
       const processed: PackingItem[] = [];
       const stockGroups = new Map<string, PackingItem>();
       for (const it of data || []) {
         if (it.status === "完了") {
           const stockQty =
             Number(it.packingInfo?.quantity ?? it.quantity ?? 0) || 0;
-          const loc = normalizeLocation(it.packingInfo?.location);
-          const key = `${it.rowIndex}|${loc}`;
+          const loc = normalizeLocation(it.packingInfo?.location || "");
+          const key = `${it.rowIndex}|${loc.key}`;
           const g = stockGroups.get(key);
           if (g) {
             g.stockQty = (g.stockQty || 0) + stockQty;
@@ -247,7 +290,7 @@ export default function UnifiedKanbanPrototypeV2() {
               ...it,
               packingInfo: {
                 ...it.packingInfo,
-                location: loc,
+                location: loc.label,
                 quantity: String(stockQty),
               },
               stockQty,
@@ -280,40 +323,8 @@ export default function UnifiedKanbanPrototypeV2() {
 
       setCards(nextCards);
       setColumns(col);
-
-      // 初期アーカイブ（サンプル3件）
-      setArchive((prev) => {
-        if (prev.length > 0) return prev;
-        const bases = data || [];
-        const b0 = bases[0] || buildMockData(f.date)[0];
-        const b1 = bases[1] || buildMockData(f.date)[1];
-        const b2 = bases[2] || buildMockData(f.date)[2];
-        return [
-          {
-            id: `sample#1`,
-            base: b1,
-            ship: { type: "ロジカム出荷", quantity: 120, date: f.date },
-          },
-          {
-            id: `sample#2`,
-            base: b2,
-            ship: { type: "羽野出荷", quantity: 50, date: f.date },
-          },
-          {
-            id: `sample#3`,
-            base: {
-              ...b0,
-              status: "完了",
-              packingInfo: {
-                ...b0.packingInfo,
-                location: "パレット③",
-                quantity: "100",
-              },
-            },
-            ship: { type: "ロジカム出荷", quantity: 80, date: f.date },
-          },
-        ];
-      });
+      setHasShipped(col.shipped.length > 0);
+      setArchive(archives);
     } catch (e: any) {
       setError(e.message || "読み込みエラー");
     } finally {
@@ -988,10 +999,12 @@ export default function UnifiedKanbanPrototypeV2() {
         ) : (
           <DndContext sensors={sensors} onDragEnd={onDragEnd}>
             <div
-              className="grid grid-cols-1 md:grid-cols-3 gap-4"
+              className={`grid grid-cols-1 ${
+                hasShipped ? "md:grid-cols-3" : "md:grid-cols-2"
+              } gap-4`}
               style={{ gridAutoFlow: "column", overflowX: "auto" }}
             >
-              {K_STATUSES.map((col) => (
+              {(hasShipped ? K_STATUSES : K_STATUSES.filter((c) => c.id !== "shipped")).map((col) => (
                 <KanbanColumn
                   key={col.id}
                   id={col.id as KanbanStatusId}
