@@ -27,6 +27,8 @@ export type PackingItem = {
   };
   stockQty?: number;
   shipType?: string;
+  packDate?: string;
+  shipDate?: string;
 };
 
 type PaginationMeta = {
@@ -46,12 +48,6 @@ type Meta = {
 };
 
 type ShipType = "ロジカム出荷" | "羽野出荷";
-
-type ArchiveItem = {
-  id: string; // cardId + ts
-  base: PackingItem;
-  ship: { type: ShipType; quantity: number; date: string };
-};
 
 // ===== API config / helpers =====
 const API_ENDPOINTS = {
@@ -206,6 +202,7 @@ function buildMockData(date: string): PackingItem[] {
       status: "完了",
       packingInfo: { location: "パレット②", quantity: "443", user: "A" },
       shipType: "",
+      packDate: date,
     },
     {
       rowIndex: 1647,
@@ -219,6 +216,7 @@ function buildMockData(date: string): PackingItem[] {
       status: "完了",
       packingInfo: { location: "パレット①", quantity: "200", user: "B" },
       shipType: "",
+      packDate: date,
     },
   ];
 }
@@ -254,10 +252,22 @@ export default function UnifiedKanbanPrototypeV2() {
   const [cards, setCards] = useState<Record<string, PackingItem>>({});
 
   // 出荷アーカイブ
-  const [archive, setArchive] = useState<ArchiveItem[]>([]);
   const [archiveOpen, setArchiveOpen] = useState(false);
-  const [archiveQuery, setArchiveQuery] = useState("");
-  const [restoreTarget, setRestoreTarget] = useState<ArchiveItem | null>(null);
+  const [archiveItems, setArchiveItems] = useState<PackingItem[]>([]);
+  const [archivePagination, setArchivePagination] = useState({
+    total: 0,
+    page: 1,
+    pageSize: 10,
+    totalPages: 1,
+  });
+  const [archiveYears, setArchiveYears] = useState<number[]>([]);
+  const [archiveMonths, setArchiveMonths] = useState<number[]>([]);
+  const [archiveDays, setArchiveDays] = useState<number[]>([]);
+  const [archiveYear, setArchiveYear] = useState<number | null>(null);
+  const [archiveMonth, setArchiveMonth] = useState<number | null>(null);
+  const [archiveDay, setArchiveDay] = useState<number | null>(null);
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [restoreTarget, setRestoreTarget] = useState<PackingItem | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
 
   const [pages, setPages] = useState({ manufactured: 1, stock: 1, shipped: 1 });
@@ -271,6 +281,7 @@ export default function UnifiedKanbanPrototypeV2() {
     pageSize: 10,
     totalPages: 1,
   });
+  const [backlogLoading, setBacklogLoading] = useState(false);
 
   // ==== データ取得 ====
   async function fetchData(
@@ -313,7 +324,6 @@ export default function UnifiedKanbanPrototypeV2() {
       params.append("pageShipped", String(p.shipped));
 
       let data: PackingItem[] | null = null;
-      let archives: ArchiveItem[] = [];
       let masters: string[] = [];
       let metaInfo: any = null;
       try {
@@ -326,7 +336,6 @@ export default function UnifiedKanbanPrototypeV2() {
         if (myId !== searchRef.current.id) return;
         if (j?.success === true) {
           data = (j.data as PackingItem[]) || [];
-          archives = (j.archive as ArchiveItem[]) || [];
           masters = Array.isArray(j.masters?.locations)
             ? (j.masters.locations as string[])
             : masters;
@@ -339,7 +348,6 @@ export default function UnifiedKanbanPrototypeV2() {
         console.error("[packing/search] failed", err);
         alert(NETWORK_ERROR_MESSAGE);
         data = buildMockData(f.date);
-        archives = [];
       }
       if (myId !== searchRef.current.id) return;
 
@@ -406,7 +414,6 @@ export default function UnifiedKanbanPrototypeV2() {
 
       setCards(nextCards);
       setColumns(col);
-      setArchive(archives);
       setMeta(metaInfo);
     } catch (e: any) {
       if (myId === searchRef.current.id)
@@ -418,6 +425,7 @@ export default function UnifiedKanbanPrototypeV2() {
 
   async function fetchBacklog(page = 1) {
     if (!filters.date) return;
+    setBacklogLoading(true);
     try {
       const params = new URLSearchParams();
       params.append("scope", "backlog");
@@ -440,7 +448,70 @@ export default function UnifiedKanbanPrototypeV2() {
       }
     } catch (e) {
       console.error("fetchBacklog failed", e);
+    } finally {
+      setBacklogLoading(false);
     }
+  }
+
+  async function fetchArchive(params: {
+    year?: number | null;
+    month?: number | null;
+    day?: number | null;
+    page?: number;
+  }) {
+    setArchiveLoading(true);
+    try {
+      const search = new URLSearchParams();
+      search.append("scope", "archive");
+      if (params.year) search.append("year", String(params.year));
+      if (params.month) search.append("month", String(params.month));
+      if (params.day) search.append("day", String(params.day));
+      search.append("paginate", "1");
+      search.append("pageSize", "10");
+      search.append("pageShipped", String(params.page || 1));
+      const res = await fetch(`/api/gas/search?${search.toString()}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(res.statusText);
+      const j = await res.json();
+      setArchiveYears(j.meta?.archive?.years || []);
+      setArchiveMonths(j.meta?.archive?.months || []);
+      setArchiveDays(j.meta?.archive?.days || []);
+      if (params.day) {
+        setArchiveItems(j.data || []);
+        const info =
+          j.meta?.pagination?.shipped ||
+          ({ total: 0, page: 1, pageSize: 10, totalPages: 1 } as any);
+        setArchivePagination(info);
+      } else {
+        setArchiveItems([]);
+        setArchivePagination({
+          total: 0,
+          page: 1,
+          pageSize: 10,
+          totalPages: 1,
+        });
+      }
+    } catch (e) {
+      console.error("fetchArchive failed", e);
+    } finally {
+      setArchiveLoading(false);
+    }
+  }
+
+  function openArchiveModal() {
+    setArchiveOpen(true);
+    setArchiveYear(null);
+    setArchiveMonth(null);
+    setArchiveDay(null);
+    setArchiveItems([]);
+    setArchivePagination({
+      total: 0,
+      page: 1,
+      pageSize: 10,
+      totalPages: 1,
+    });
+    fetchArchive({});
   }
 
   useEffect(() => {
@@ -659,24 +730,21 @@ export default function UnifiedKanbanPrototypeV2() {
     }
   }
 
-  function restoreFromArchive(a: ArchiveItem) {
+  function restoreFromArchive(a: PackingItem) {
     // ダイアログで入力させる
     setRestoreTarget(a);
   }
 
   async function doRestoreFromArchive(
-    a: ArchiveItem,
+    a: PackingItem,
     payload: { location?: string; quantity?: number },
   ) {
     const loc = normalizeLocation(payload.location || "");
     if (!loc.label) return;
-    const qty = Math.max(
-      1,
-      Math.min(a.ship.quantity, payload.quantity || a.ship.quantity),
-    );
+    const qty = Math.max(1, Math.min(a.quantity, payload.quantity || a.quantity));
     const rid = genRequestId();
 
-    // 後処理（ドロワーを閉じ、対象カードへスクロール＆一時ハイライト）
+    // 後処理（モーダルを閉じ、対象カードへスクロール＆一時ハイライト）
     const finish = (targetId: string) => {
       setArchiveOpen(false);
       setRestoreTarget(null);
@@ -699,7 +767,7 @@ export default function UnifiedKanbanPrototypeV2() {
       const it = cards[id];
       return (
         it &&
-        it.rowIndex === a.base.rowIndex &&
+        it.rowIndex === a.rowIndex &&
         (it.packingInfo.location || "") === loc.label &&
         columns.stock.includes(id)
       );
@@ -721,13 +789,13 @@ export default function UnifiedKanbanPrototypeV2() {
       setColumns((prev) => ({
         ...prev,
         shipped: prev.shipped.filter(
-          (id) => (cards[id]?.rowIndex ?? -1) !== a.base.rowIndex,
+          (id) => (cards[id]?.rowIndex ?? -1) !== a.rowIndex,
         ),
       }));
       try {
         await updatePacking({
           action: "restore",
-          rowIndex: a.base.rowIndex,
+          rowIndex: a.rowIndex,
           packingData: { quantity: qty, location: loc.label, to: loc.label },
           log: {
             when: new Date().toISOString(),
@@ -747,12 +815,12 @@ export default function UnifiedKanbanPrototypeV2() {
     }
 
     // 新規在庫カードとして追加
-    const updated = computeRestoredItem(a.base, loc.label, qty);
+    const updated = computeRestoredItem(a, loc.label, qty);
     const newId = makeId(updated);
     setCards((prev) => ({ ...prev, [newId]: updated }));
     setColumns((prev) => {
       const shippedIds = prev.shipped.filter(
-        (id) => (cards[id]?.rowIndex ?? -1) !== a.base.rowIndex,
+        (id) => (cards[id]?.rowIndex ?? -1) !== a.rowIndex,
       );
       const nextStock = prev.stock.includes(newId)
         ? prev.stock
@@ -762,7 +830,7 @@ export default function UnifiedKanbanPrototypeV2() {
     try {
       await updatePacking({
         action: "restore",
-        rowIndex: a.base.rowIndex,
+        rowIndex: a.rowIndex,
         packingData: { quantity: qty, location: loc.label, to: loc.label },
         log: {
           when: new Date().toISOString(),
@@ -1032,12 +1100,12 @@ function makeId(item: PackingItem) {
               <span className="text-5xl">📦</span>
               {headerTitle}
             </h1>
-            <button
-              onClick={() => setArchiveOpen(true)}
-              className="hidden md:inline-flex px-4 py-2 rounded-full border-2 border-purple-600 text-purple-700 hover:bg-purple-50"
-            >
-              アーカイブ
-            </button>
+              <button
+                onClick={openArchiveModal}
+                className="hidden md:inline-flex px-4 py-2 rounded-full border-2 border-purple-600 text-purple-700 hover:bg-purple-50"
+              >
+                アーカイブ
+              </button>
           </div>
 
           {/* フィルター */}
@@ -1176,7 +1244,7 @@ function makeId(item: PackingItem) {
                         }
                       : undefined
                   }
-                  onOpenArchive={() => setArchiveOpen(true)}
+                  onOpenArchive={openArchiveModal}
                   onRequestPack={requestPack}
                   onRequestShip={requestShip}
                   onRequestMove={requestMove}
@@ -1223,8 +1291,8 @@ function makeId(item: PackingItem) {
           >
             <ActionForm
               mode="pack"
-              defaultLocation={restoreTarget.base.packingInfo.location || ""}
-              maxQuantity={restoreTarget.ship.quantity}
+              defaultLocation={restoreTarget.packingInfo.location || ""}
+              maxQuantity={restoreTarget.quantity}
               useSelectLocation={true}
               showLocation={true}
               showQuantity={true}
@@ -1253,47 +1321,170 @@ function makeId(item: PackingItem) {
             }
             bodyClassName="max-h-[80vh] min-h-[40vh] overflow-y-auto"
           >
-            <div className="space-y-4">
-              <DndContext sensors={[]}>
-                <SortableContext
-                  items={backlogItems.map((it) => makeId(it))}
-                  strategy={rectSortingStrategy}
-                >
-                  <div className="space-y-4">
-                    {backlogItems.map((it) => (
-                      <KanbanCard
-                        key={makeId(it)}
-                        id={makeId(it)}
-                        item={it}
-                        columnId="manufactured"
-                        highlightId={null}
-                        onRequestPack={requestPack}
-                        onRequestShip={requestShip}
-                        onRequestMove={requestMove}
-                        onRequestRestore={() => {}}
-                      />
-                    ))}
-                  </div>
-                </SortableContext>
-              </DndContext>
-              <Pager
-                page={backlogPagination.page}
-                totalPages={backlogPagination.totalPages}
-                onChange={(p) => fetchBacklog(p)}
-              />
-            </div>
+            {backlogLoading ? (
+              <Loading />
+            ) : (
+              <div className="space-y-4">
+                <DndContext sensors={[]}>
+                  <SortableContext
+                    items={backlogItems.map((it) => makeId(it))}
+                    strategy={rectSortingStrategy}
+                  >
+                    <div className="space-y-4">
+                      {backlogItems.map((it) => (
+                        <KanbanCard
+                          key={makeId(it)}
+                          id={makeId(it)}
+                          item={it}
+                          columnId="manufactured"
+                          highlightId={null}
+                          onRequestPack={requestPack}
+                          onRequestShip={requestShip}
+                          onRequestMove={requestMove}
+                          onRequestRestore={() => {}}
+                        />
+                      ))}
+                    </div>
+                  </SortableContext>
+                </DndContext>
+                <Pager
+                  page={backlogPagination.page}
+                  totalPages={backlogPagination.totalPages}
+                  onChange={(p) => fetchBacklog(p)}
+                />
+              </div>
+            )}
           </SimpleDialog>
         )}
 
-        {/* アーカイブ ドロワー */}
-        <ArchiveDrawer
-          open={archiveOpen}
-          onClose={() => setArchiveOpen(false)}
-          items={archive}
-          query={archiveQuery}
-          onQuery={setArchiveQuery}
-          onRestore={restoreFromArchive}
-        />
+        {/* アーカイブモーダル */}
+        {archiveOpen && (
+          <SimpleDialog
+            title="アーカイブ"
+            onClose={() => setArchiveOpen(false)}
+            headerRight={
+              archiveYear && archiveMonth && archiveDay ? (
+                <Pager
+                  page={archivePagination.page}
+                  totalPages={archivePagination.totalPages}
+                  onChange={(p) =>
+                    fetchArchive({
+                      year: archiveYear,
+                      month: archiveMonth,
+                      day: archiveDay,
+                      page: p,
+                    })
+                  }
+                />
+              ) : null
+            }
+            bodyClassName="max-h-[80vh] min-h-[40vh] overflow-y-auto"
+          >
+            <div className="space-y-4">
+              <div className="flex gap-2">
+                <select
+                  value={archiveYear ?? ""}
+                  onChange={(e) => {
+                    const y = e.target.value ? Number(e.target.value) : null;
+                    setArchiveYear(y);
+                    setArchiveMonth(null);
+                    setArchiveDay(null);
+                    fetchArchive({ year: y });
+                  }}
+                  className="border px-2 py-1 rounded"
+                >
+                  <option value="">年</option>
+                  {archiveYears.map((y) => (
+                    <option key={y} value={y}>
+                      {y}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={archiveMonth ?? ""}
+                  onChange={(e) => {
+                    const m = e.target.value ? Number(e.target.value) : null;
+                    setArchiveMonth(m);
+                    setArchiveDay(null);
+                    if (archiveYear) fetchArchive({ year: archiveYear, month: m });
+                  }}
+                  disabled={!archiveYear}
+                  className="border px-2 py-1 rounded"
+                >
+                  <option value="">月</option>
+                  {archiveMonths.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={archiveDay ?? ""}
+                  onChange={(e) => {
+                    const d = e.target.value ? Number(e.target.value) : null;
+                    setArchiveDay(d);
+                    if (archiveYear && archiveMonth && d)
+                      fetchArchive({ year: archiveYear, month: archiveMonth, day: d });
+                  }}
+                  disabled={!archiveMonth}
+                  className="border px-2 py-1 rounded"
+                >
+                  <option value="">日</option>
+                  {archiveDays.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {archiveLoading ? (
+                <Loading />
+              ) : (
+                archiveYear &&
+                archiveMonth &&
+                archiveDay && (
+                  <>
+                    <DndContext sensors={[]}>
+                      <SortableContext
+                        items={archiveItems.map((it) => makeId(it))}
+                        strategy={rectSortingStrategy}
+                      >
+                        <div className="space-y-4">
+                          {archiveItems.map((it) => (
+                            <KanbanCard
+                              key={makeId(it)}
+                              id={makeId(it)}
+                              item={it}
+                              columnId="shipped"
+                              highlightId={null}
+                              onRequestPack={() => {}}
+                              onRequestShip={() => {}}
+                              onRequestMove={() => {}}
+                              onRequestRestore={restoreFromArchive}
+                            />
+                          ))}
+                        </div>
+                      </SortableContext>
+                    </DndContext>
+                    <Pager
+                      page={archivePagination.page}
+                      totalPages={archivePagination.totalPages}
+                      onChange={(p) =>
+                        fetchArchive({
+                          year: archiveYear,
+                          month: archiveMonth,
+                          day: archiveDay,
+                          page: p,
+                        })
+                      }
+                    />
+                  </>
+                )
+              )}
+            </div>
+          </SimpleDialog>
+        )}
       </div>
     </div>
   );
@@ -1438,18 +1629,6 @@ function KanbanCard({
         highlightId === id ? "ring-4 ring-amber-400 animate-pulse" : ""
       }`}
     >
-      <div className="flex justify-between items-center mb-2">
-        <div className="text-sm text-gray-600">
-          {item.manufactureDate} ・バッチ{item.batchNo || "-"} ・行No.
-          {item.rowIndex}
-        </div>
-        {columnId === "stock" && (
-          <span className="inline-flex items-center text-xs px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-700">
-            在庫 {item.stockQty ?? item.quantity} 個
-          </span>
-        )}
-      </div>
-
       {/* 情報行：2カラム混在（ご要望版） */}
       <div className="space-y-2 text-sm">
         {/* 1行目：味付け種類 / 製造日 */}
@@ -1472,13 +1651,32 @@ function KanbanCard({
           />
           <Field k="製造商品" v={item.manufactureProduct || "-"} />
         </div>
-        {/* 4行目：保管場所 / 出荷先 */}
-        {columnId === "stock" && (
-          <Field k="保管場所" v={item.packingInfo.location || "-"} />
-        )}
-        {columnId === "shipped" && (
-          <Field k="出荷先" v={item.shipType || "-"} />
-        )}
+          {/* 4行目：梱包日 / 出荷日 */}
+          {columnId === "stock" && <Field k="梱包日" v={item.packDate || "-"} />}
+          {columnId === "shipped" && <Field k="出荷日" v={item.shipDate || "-"} />}
+
+          {/* 5行目：保管場所 / 出荷先 */}
+          {columnId === "stock" && (
+            <Field k="保管場所" v={item.packingInfo.location || "-"} />
+          )}
+          {columnId === "shipped" && (
+            <Field
+              k="出荷先"
+              v={
+                <span
+                  className={
+                    item.shipType === "羽野出荷"
+                      ? "text-sky-500"
+                      : item.shipType === "ロジカム出荷"
+                        ? "text-pink-500"
+                        : ""
+                  }
+                >
+                  {item.shipType || "-"}
+                </span>
+              }
+            />
+          )}
       </div>
 
       {/* アクション */}
@@ -1534,6 +1732,15 @@ function ButtonLine({
     >
       {children}
     </button>
+  );
+}
+
+function Loading() {
+  return (
+    <div className="py-10 flex items-center justify-center text-gray-600">
+      <div className="h-5 w-5 mr-2 border-2 border-gray-300 border-t-transparent rounded-full animate-spin" />
+      読み込み中…
+    </div>
   );
 }
 
@@ -1728,77 +1935,3 @@ function ActionForm({
   );
 }
 
-// ===== Archive Drawer =====
-function ArchiveDrawer({
-  open,
-  onClose,
-  items,
-  query,
-  onQuery,
-  onRestore,
-}: {
-  open: boolean;
-  onClose: () => void;
-  items: ArchiveItem[];
-  query: string;
-  onQuery: (q: string) => void;
-  onRestore: (x: ArchiveItem) => void;
-}) {
-  const list = items.filter((i) =>
-    !query ||
-    `${i.base.seasoningType}${i.base.fishType}${i.base.origin}${i.base.manufactureProduct}`
-      .toLowerCase()
-      .includes(query.toLowerCase())
-  );
-  return (
-    <div
-      className={`fixed top-0 right-0 h-screen w-full md:w-[420px] bg-white shadow-2xl z-50 transition-transform ${
-        open ? "translate-x-0" : "translate-x-full"
-      }`}
-    >
-      <div className="flex items-center justify-between px-4 py-3 border-b">
-        <strong>📚 出荷アーカイブ</strong>
-        <div className="flex items-center gap-2">
-          <input
-            value={query}
-            onChange={(e) => onQuery(e.target.value)}
-            placeholder="味付け/魚種/産地で検索"
-            className="px-3 py-2 border rounded-lg"
-          />
-          <button
-            onClick={onClose}
-            className="px-3 py-2 rounded-lg bg-gray-200"
-          >
-            閉じる
-          </button>
-        </div>
-      </div>
-      <div className="p-3 overflow-auto h-[calc(100vh-56px)]">
-        {list.length === 0 && (
-          <div className="text-gray-500 text-sm">出荷履歴はまだありません</div>
-        )}
-        {list.map((i) => (
-          <div key={i.id} className="border rounded-xl p-3 mb-3 bg-gray-50">
-            <div className="flex items-center justify-between mb-2">
-              <div>
-                <div className="font-semibold">{i.base.seasoningType}</div>
-                <div className="text-sm text-gray-500">
-                  {i.base.fishType} / {i.base.origin}
-                </div>
-              </div>
-              <button
-                onClick={() => onRestore(i)}
-                className="px-2 py-1 text-sm bg-purple-600 text-white rounded-lg"
-              >
-                復帰
-              </button>
-            </div>
-            <div className="text-sm">
-              {i.ship.type} {i.ship.quantity}個 ({i.ship.date})
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
