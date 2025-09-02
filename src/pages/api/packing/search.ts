@@ -33,7 +33,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const qs = new URLSearchParams(parsed.data as Record<string,string>).toString();
-    const r = await fetch(`${base}?action=search&${qs}`, { cache: "no-store" });
+    const r = await fetch(`/api/gas/search?${qs}`, { cache: "no-store" });
     const j = await r.json();
     return res.status(200).json(j);
   } catch (e:any) {
