@@ -205,6 +205,10 @@ function buildMockData(date: string): PackingItem[] {
 export default function UnifiedKanbanPrototypeV2() {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const inflightRef = useRef<Set<string>>(new Set()); // 多重送信ガード
+  const searchRef = useRef<{ id: number; controller: AbortController | null }>({
+    id: 0,
+    controller: null,
+  });
 
   const [filters, setFilters] = useState<Filters>({
     date: today,
@@ -238,6 +242,10 @@ export default function UnifiedKanbanPrototypeV2() {
   async function fetchData(override?: Partial<Filters>) {
     setLoading(true);
     setError(null);
+    const myId = ++searchRef.current.id;
+    searchRef.current.controller?.abort();
+    const controller = new AbortController();
+    searchRef.current.controller = controller;
     try {
       const f = { ...filters, ...override };
 
@@ -260,12 +268,14 @@ export default function UnifiedKanbanPrototypeV2() {
       let archives: ArchiveItem[] = [];
       let masters: string[] = [];
       try {
-        const res = await fetchWithRetry(
+        const res = await fetch(
           `${API_ENDPOINTS.SEARCH_PACKING}?${params.toString()}`,
-          { cache: "no-store" },
+          { signal: controller.signal, cache: "no-store" },
         );
-        const j = await res.json();
-        if (j?.success) {
+        if (!res.ok) throw new Error(res.statusText);
+        const j = await res.json().catch(() => null);
+        if (myId !== searchRef.current.id) return;
+        if (j?.success === true) {
           data = (j.data as PackingItem[]) || [];
           archives = (j.archive as ArchiveItem[]) || [];
           masters = Array.isArray(j.masters?.locations)
@@ -274,10 +284,14 @@ export default function UnifiedKanbanPrototypeV2() {
         } else {
           throw new Error(j?.error || "検索に失敗しました");
         }
-      } catch {
+      } catch (err) {
+        if ((err as any)?.name === "AbortError") return;
+        console.error("[packing/search] failed", err);
+        alert(NETWORK_ERROR_MESSAGE);
         data = buildMockData(f.date);
         archives = [];
       }
+      if (myId !== searchRef.current.id) return;
 
       const locMap = new Map<string, string>();
       for (const raw of masters.length ? masters : STORAGE_OPTIONS) {
@@ -344,9 +358,10 @@ export default function UnifiedKanbanPrototypeV2() {
       setColumns(col);
       setArchive(archives);
     } catch (e: any) {
-      setError(e.message || "読み込みエラー");
+      if (myId === searchRef.current.id)
+        setError(e.message || "読み込みエラー");
     } finally {
-      setLoading(false);
+      if (myId === searchRef.current.id) setLoading(false);
     }
   }
 
