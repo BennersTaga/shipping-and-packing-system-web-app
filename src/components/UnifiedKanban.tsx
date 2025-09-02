@@ -100,6 +100,8 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
+import Pager from "./Pager";
+
 // ===== 純粋関数（テストしやすい） =====
 export function computeRestoredItem(
   base: PackingItem,
@@ -238,8 +240,32 @@ export default function UnifiedKanbanPrototypeV2() {
   const [restoreTarget, setRestoreTarget] = useState<ArchiveItem | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
 
+  const [pages, setPages] = useState({ manufactured: 1, stock: 1, shipped: 1 });
+  const [meta, setMeta] = useState<
+    | {
+        pagination?: Record<
+          KanbanStatusId,
+          { total: number; page: number; pageSize: number; totalPages: number }
+        >;
+        backlog?: { count: number; items?: PackingItem[] };
+      }
+    | null
+  >(null);
+
+  const [backlogOpen, setBacklogOpen] = useState(false);
+  const [backlogItems, setBacklogItems] = useState<PackingItem[]>([]);
+  const [backlogPagination, setBacklogPagination] = useState({
+    total: 0,
+    page: 1,
+    pageSize: 10,
+    totalPages: 1,
+  });
+
   // ==== データ取得 ====
-  async function fetchData(override?: Partial<Filters>) {
+  async function fetchData(
+    override?: Partial<Filters>,
+    pageOverride?: Partial<typeof pages>,
+  ) {
     setLoading(true);
     setError(null);
     const myId = ++searchRef.current.id;
@@ -248,6 +274,8 @@ export default function UnifiedKanbanPrototypeV2() {
     searchRef.current.controller = controller;
     try {
       const f = { ...filters, ...override };
+      const p = { ...pages, ...pageOverride };
+      setPages(p);
 
       // 既存 API の status は "未処理"/"完了" なのでマッピング
       const legacyStatusMap: Record<string, string> = {
@@ -257,16 +285,26 @@ export default function UnifiedKanbanPrototypeV2() {
       };
 
       const params = new URLSearchParams();
-      if (f.date) params.append("date", f.date);
+      if (f.date) {
+        params.append("date", f.date);
+        params.append("includeBacklog", "1");
+      }
       if (f.product) params.append("product", f.product);
       if (f.status && legacyStatusMap[f.status])
         params.append("status", legacyStatusMap[f.status]);
       if (f.quantityMin) params.append("quantityMin", f.quantityMin);
       if (f.quantityMax) params.append("quantityMax", f.quantityMax);
 
+      params.append("paginate", "1");
+      params.append("pageSize", "10");
+      params.append("pageManufactured", String(p.manufactured));
+      params.append("pageStock", String(p.stock));
+      params.append("pageShipped", String(p.shipped));
+
       let data: PackingItem[] | null = null;
       let archives: ArchiveItem[] = [];
       let masters: string[] = [];
+      let metaInfo: any = null;
       try {
         const res = await fetch(
           `${API_ENDPOINTS.SEARCH_PACKING}?${params.toString()}`,
@@ -281,6 +319,7 @@ export default function UnifiedKanbanPrototypeV2() {
           masters = Array.isArray(j.masters?.locations)
             ? (j.masters.locations as string[])
             : masters;
+          metaInfo = j.meta || null;
         } else {
           throw new Error(j?.error || "検索に失敗しました");
         }
@@ -357,11 +396,39 @@ export default function UnifiedKanbanPrototypeV2() {
       setCards(nextCards);
       setColumns(col);
       setArchive(archives);
+      setMeta(metaInfo);
     } catch (e: any) {
       if (myId === searchRef.current.id)
         setError(e.message || "読み込みエラー");
     } finally {
       if (myId === searchRef.current.id) setLoading(false);
+    }
+  }
+
+  async function fetchBacklog(page = 1) {
+    if (!filters.date) return;
+    try {
+      const params = new URLSearchParams();
+      params.append("scope", "backlog");
+      params.append("excludeDate", filters.date);
+      params.append("paginate", "1");
+      params.append("pageSize", "10");
+      params.append("pageManufactured", String(page));
+      const res = await fetch(
+        `${API_ENDPOINTS.SEARCH_PACKING}?${params.toString()}`,
+        { cache: "no-store" },
+      );
+      if (!res.ok) throw new Error(res.statusText);
+      const j = await res.json();
+      if (j.success) {
+        setBacklogItems(j.data || []);
+        const info =
+          j.meta?.pagination?.manufactured ||
+          ({ total: 0, page: 1, pageSize: 10, totalPages: 1 } as any);
+        setBacklogPagination(info);
+      }
+    } catch (e) {
+      console.error("fetchBacklog failed", e);
     }
   }
 
@@ -1085,6 +1152,19 @@ function makeId(item: PackingItem) {
                   cardIds={columns[col.id as KanbanStatusId]}
                   allCards={cards}
                   highlightId={highlightId}
+                  pagination={meta?.pagination?.[col.id as KanbanStatusId]}
+                  onPageChange={(p) => fetchData(undefined, { [col.id]: p })}
+                  backlogCount={
+                    col.id === "manufactured" ? meta?.backlog?.count || 0 : 0
+                  }
+                  onShowBacklog={
+                    col.id === "manufactured"
+                      ? () => {
+                          setBacklogOpen(true);
+                          fetchBacklog(1);
+                        }
+                      : undefined
+                  }
                   onOpenArchive={() => setArchiveOpen(true)}
                   onRequestPack={requestPack}
                   onRequestShip={requestShip}
@@ -1148,6 +1228,39 @@ function makeId(item: PackingItem) {
           </SimpleDialog>
         )}
 
+        {/* 未梱包モーダル */}
+        {backlogOpen && (
+          <SimpleDialog title="未梱包一覧" onClose={() => setBacklogOpen(false)}>
+            <div className="space-y-3">
+              <DndContext sensors={[]}>
+                <SortableContext
+                  items={backlogItems.map((it) => makeId(it))}
+                  strategy={rectSortingStrategy}
+                >
+                  {backlogItems.map((it) => (
+                    <KanbanCard
+                      key={makeId(it)}
+                      id={makeId(it)}
+                      item={it}
+                      columnId="manufactured"
+                      highlightId={null}
+                      onRequestPack={requestPack}
+                      onRequestShip={requestShip}
+                      onRequestMove={requestMove}
+                      onRequestRestore={() => {}}
+                    />
+                  ))}
+                </SortableContext>
+              </DndContext>
+              <Pager
+                page={backlogPagination.page}
+                totalPages={backlogPagination.totalPages}
+                onChange={(p) => fetchBacklog(p)}
+              />
+            </div>
+          </SimpleDialog>
+        )}
+
         {/* アーカイブ ドロワー */}
         <ArchiveDrawer
           open={archiveOpen}
@@ -1170,6 +1283,10 @@ function KanbanColumn({
   cardIds,
   allCards,
   highlightId,
+  pagination,
+  onPageChange,
+  backlogCount,
+  onShowBacklog,
   onOpenArchive,
   onRequestPack,
   onRequestShip,
@@ -1182,6 +1299,10 @@ function KanbanColumn({
   cardIds: string[];
   allCards: Record<string, PackingItem>;
   highlightId: string | null;
+  pagination?: { total: number; page: number; pageSize: number; totalPages: number };
+  onPageChange?: (p: number) => void;
+  backlogCount?: number;
+  onShowBacklog?: () => void;
   onOpenArchive: () => void;
   onRequestPack: (item: PackingItem) => void;
   onRequestShip: (item: PackingItem) => void;
@@ -1194,6 +1315,14 @@ function KanbanColumn({
         <div className="flex items-baseline gap-2">
           <h2 className="text-xl font-extrabold text-gray-800">{title}</h2>
           {hint && <span className="text-xs text-gray-500">{hint}</span>}
+          {id === "manufactured" && (backlogCount || 0) > 0 && (
+            <button
+              onClick={onShowBacklog}
+              className="ml-2 bg-red-600 text-white text-xs px-2 rounded-full"
+            >
+              未梱包ｱﾘ
+            </button>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <span className="text-sm text-gray-500">{cardIds.length} 件</span>
@@ -1207,6 +1336,13 @@ function KanbanColumn({
           )}
         </div>
       </div>
+      {pagination && onPageChange && (
+        <Pager
+          page={pagination.page}
+          totalPages={pagination.totalPages}
+          onChange={onPageChange}
+        />
+      )}
       <SortableContext items={cardIds} strategy={rectSortingStrategy}>
         <div id={id} className="space-y-3 min-h-[50vh]" data-droppable>
           {cardIds.length === 0 && (
