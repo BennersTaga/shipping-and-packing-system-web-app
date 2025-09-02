@@ -16,6 +16,17 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function originFromReq(req: NextApiRequest) {
+  const proto =
+    (req.headers["x-forwarded-proto"] as string) ||
+    "https";
+  const host =
+    (req.headers["x-forwarded-host"] as string) ||
+    (req.headers.host as string) ||
+    "localhost:3000";
+  return `${proto}://${host}`;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
     if (req.method !== "POST") {
@@ -42,10 +53,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const { action, ...rest } = parsed.data;
     const body = JSON.stringify({ ...rest, requestId: reqId });
+    const origin = originFromReq(req);
+    const url = `${origin}/api/gas/${action}`;
 
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const r = await fetch(`/api/gas/${action}`, { method: "POST", headers, body, cache: "no-store" });
+        const r = await fetch(url, { method: "POST", headers, body, cache: "no-store" });
         const ct = r.headers.get("content-type") || "";
         const resp = ct.includes("application/json") ? await r.json() : await r.text();
         if (!r.ok) {
