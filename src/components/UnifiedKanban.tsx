@@ -850,9 +850,12 @@ export default function UnifiedKanbanPrototypeV2() {
       return { ...prev, [from]: src, [to]: dst };
     });
   }
-  function makeId(item: PackingItem) {
-    return `${item.rowIndex}_${item.packingInfo?.location || "-"}`;
-  }
+function makeId(item: PackingItem) {
+  const tag =
+    (item.packingInfo?.location || "").trim() || item.status || "-";
+  return `${item.rowIndex}_${tag}`;
+}
+
   function findColumnOf(
     cardId: string,
     cols: Record<KanbanStatusId, string[]>,
