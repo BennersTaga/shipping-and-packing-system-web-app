@@ -28,15 +28,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ success: false, error: parsed.error.message });
     }
 
-    const url = process.env.GAS_UPDATE_URL;
     const apiKey = process.env.GAS_API_KEY;
 
     const reqId = (req.headers["x-request-id"] as string) || parsed.data.requestId || generateRequestId();
     res.setHeader("X-Request-Id", reqId);
 
-    if (!url) {
-      return res.status(200).json({ success: true, mock: true });
-    }
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -44,11 +40,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
     if (apiKey) headers["X-Api-Key"] = apiKey;
 
-    const body = JSON.stringify({ ...parsed.data, requestId: reqId });
+    const { action, ...rest } = parsed.data;
+    const body = JSON.stringify({ ...rest, requestId: reqId });
 
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const r = await fetch(url, { method: "POST", headers, body });
+        const r = await fetch(`/api/gas/${action}`, { method: "POST", headers, body, cache: "no-store" });
         const ct = r.headers.get("content-type") || "";
         const resp = ct.includes("application/json") ? await r.json() : await r.text();
         if (!r.ok) {

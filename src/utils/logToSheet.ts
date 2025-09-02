@@ -13,10 +13,9 @@ export async function logToSheet(event: {
   operator?: string;
   note?: string;
 }) {
-  const url = process.env.GAS_WEBHOOK_URL!;
   const token = process.env.GAS_WEBHOOK_TOKEN!;
-  if (!url || !token) return;
-  await fetch(url, {
+  if (!token) return;
+  await fetch(`/api/gas/webhook`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-webhook-token': token },
     body: JSON.stringify(event),
