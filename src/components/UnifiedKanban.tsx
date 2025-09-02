@@ -26,6 +26,23 @@ export type PackingItem = {
     user?: string;
   };
   stockQty?: number;
+  shipType?: string;
+};
+
+type PaginationMeta = {
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
+
+type Meta = {
+  pagination?: {
+    manufactured: PaginationMeta;
+    stock: PaginationMeta;
+    shipped: PaginationMeta;
+  };
+  backlog?: { count: number; items?: PackingItem[] };
 };
 
 type ShipType = "ロジカム出荷" | "羽野出荷";
@@ -175,6 +192,7 @@ function buildMockData(date: string): PackingItem[] {
       manufactureProduct: "フィシュル商品",
       status: "未処理",
       packingInfo: { location: "", quantity: "0" },
+      shipType: "",
     },
     {
       rowIndex: 1646,
@@ -187,6 +205,7 @@ function buildMockData(date: string): PackingItem[] {
       manufactureProduct: "フィシュル商品",
       status: "完了",
       packingInfo: { location: "パレット②", quantity: "443", user: "A" },
+      shipType: "",
     },
     {
       rowIndex: 1647,
@@ -199,6 +218,7 @@ function buildMockData(date: string): PackingItem[] {
       manufactureProduct: "フィシュル商品",
       status: "完了",
       packingInfo: { location: "パレット①", quantity: "200", user: "B" },
+      shipType: "",
     },
   ];
 }
@@ -241,16 +261,7 @@ export default function UnifiedKanbanPrototypeV2() {
   const [highlightId, setHighlightId] = useState<string | null>(null);
 
   const [pages, setPages] = useState({ manufactured: 1, stock: 1, shipped: 1 });
-  const [meta, setMeta] = useState<
-    | {
-        pagination?: Record<
-          KanbanStatusId,
-          { total: number; page: number; pageSize: number; totalPages: number }
-        >;
-        backlog?: { count: number; items?: PackingItem[] };
-      }
-    | null
-  >(null);
+  const [meta, setMeta] = useState<Meta | null>(null);
 
   const [backlogOpen, setBacklogOpen] = useState(false);
   const [backlogItems, setBacklogItems] = useState<PackingItem[]>([]);
@@ -1230,26 +1241,39 @@ function makeId(item: PackingItem) {
 
         {/* 未梱包モーダル */}
         {backlogOpen && (
-          <SimpleDialog title="未梱包一覧" onClose={() => setBacklogOpen(false)}>
-            <div className="space-y-3">
+          <SimpleDialog
+            title="未梱包一覧"
+            onClose={() => setBacklogOpen(false)}
+            headerRight={
+              <Pager
+                page={backlogPagination.page}
+                totalPages={backlogPagination.totalPages}
+                onChange={(p) => fetchBacklog(p)}
+              />
+            }
+            bodyClassName="max-h-[80vh] min-h-[40vh] overflow-y-auto"
+          >
+            <div className="space-y-4">
               <DndContext sensors={[]}>
                 <SortableContext
                   items={backlogItems.map((it) => makeId(it))}
                   strategy={rectSortingStrategy}
                 >
-                  {backlogItems.map((it) => (
-                    <KanbanCard
-                      key={makeId(it)}
-                      id={makeId(it)}
-                      item={it}
-                      columnId="manufactured"
-                      highlightId={null}
-                      onRequestPack={requestPack}
-                      onRequestShip={requestShip}
-                      onRequestMove={requestMove}
-                      onRequestRestore={() => {}}
-                    />
-                  ))}
+                  <div className="space-y-4">
+                    {backlogItems.map((it) => (
+                      <KanbanCard
+                        key={makeId(it)}
+                        id={makeId(it)}
+                        item={it}
+                        columnId="manufactured"
+                        highlightId={null}
+                        onRequestPack={requestPack}
+                        onRequestShip={requestShip}
+                        onRequestMove={requestMove}
+                        onRequestRestore={() => {}}
+                      />
+                    ))}
+                  </div>
                 </SortableContext>
               </DndContext>
               <Pager
@@ -1428,8 +1452,11 @@ function KanbanCard({
 
       {/* 情報行：2カラム混在（ご要望版） */}
       <div className="space-y-2 text-sm">
-        {/* 1行目：味付け種類（フル幅） */}
-        <Field k="味付け種類" v={item.seasoningType || "-"} />
+        {/* 1行目：味付け種類 / 製造日 */}
+        <div className="grid grid-cols-2 gap-3">
+          <Field k="味付け種類" v={item.seasoningType || "-"} />
+          <Field k="製造日" v={item.manufactureDate || "-"} />
+        </div>
 
         {/* 2行目：魚種 / 産地 */}
         <div className="grid grid-cols-2 gap-3">
@@ -1445,10 +1472,12 @@ function KanbanCard({
           />
           <Field k="製造商品" v={item.manufactureProduct || "-"} />
         </div>
-
-        {/* 4行目：保管場所（在庫列のみ） */}
+        {/* 4行目：保管場所 / 出荷先 */}
         {columnId === "stock" && (
           <Field k="保管場所" v={item.packingInfo.location || "-"} />
+        )}
+        {columnId === "shipped" && (
+          <Field k="出荷先" v={item.shipType || "-"} />
         )}
       </div>
 
@@ -1513,10 +1542,14 @@ function SimpleDialog({
   title,
   children,
   onClose,
+  headerRight,
+  bodyClassName,
 }: {
   title: string;
   children: React.ReactNode;
   onClose: () => void;
+  headerRight?: React.ReactNode;
+  bodyClassName?: string;
 }) {
   return (
     <div
@@ -1527,14 +1560,17 @@ function SimpleDialog({
       <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl">
         <div className="flex items-center justify-between px-5 py-4 border-b">
           <h3 className="text-lg font-semibold">{title}</h3>
-          <button
-            onClick={onClose}
-            className="px-2 py-1 text-gray-500 hover:text-gray-700"
-          >
-            ×
-          </button>
+          <div className="flex items-center gap-2">
+            {headerRight}
+            <button
+              onClick={onClose}
+              className="px-2 py-1 text-gray-500 hover:text-gray-700"
+            >
+              ×
+            </button>
+          </div>
         </div>
-        <div className="p-5">{children}</div>
+        <div className={`p-5 ${bodyClassName || ''}`}>{children}</div>
       </div>
     </div>
   );

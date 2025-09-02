@@ -8,15 +8,24 @@ type Props = {
 
 export default function Pager({ page, totalPages, onChange }: Props) {
   if (totalPages <= 1) return null;
-  const pages = Array.from({ length: totalPages }, (_, i) => i + 1);
+
+  const windowSize = 5;
+  const half = Math.floor(windowSize / 2);
+  const start = Math.max(
+    1,
+    Math.min(page - half, totalPages - windowSize + 1),
+  );
+  const end = Math.min(totalPages, start + windowSize - 1);
+  const pages = Array.from({ length: end - start + 1 }, (_, i) => start + i);
+
   return (
     <div className="flex justify-center items-center gap-1 my-2">
       <button
         className="px-2 py-1 text-xs rounded border"
-        disabled={page <= 1}
-        onClick={() => page > 1 && onChange(page - 1)}
+        disabled={page === 1}
+        onClick={() => onChange(1)}
       >
-        Prev
+        ‹
       </button>
       {pages.map((p) => (
         <button
@@ -29,10 +38,10 @@ export default function Pager({ page, totalPages, onChange }: Props) {
       ))}
       <button
         className="px-2 py-1 text-xs rounded border"
-        disabled={page >= totalPages}
-        onClick={() => page < totalPages && onChange(page + 1)}
+        disabled={page === totalPages}
+        onClick={() => onChange(totalPages)}
       >
-        Next
+        ›
       </button>
     </div>
   );
