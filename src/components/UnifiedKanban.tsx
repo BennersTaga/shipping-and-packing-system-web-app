@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import EnvBadge from "./EnvBadge";
-import { defaultEnv, EnvKey } from "@/lib/env";
+
+type EnvKey = 'test' | 'prod';
 // Unified Kanban UI – 梱包/出荷/在庫 の表側プロトタイプ
 // v2.20
 // - カード情報を縦並びにレイアウト（長い文字列でも途中で切れにくい）
@@ -227,7 +228,7 @@ function buildMockData(date: string): PackingItem[] {
 }
 
 // ===== メイン =====
-export default function UnifiedKanbanPrototypeV2() {
+function UnifiedKanbanImpl() {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const inflightRef = useRef<Set<string>>(new Set()); // 多重送信ガード
   const searchRef = useRef<{ id: number; controller: AbortController | null }>({
@@ -276,12 +277,15 @@ export default function UnifiedKanbanPrototypeV2() {
   const [highlightId, setHighlightId] = useState<string | null>(null);
 
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const initialEnv: EnvKey = (() => {
-    const v = searchParams.get("env");
-    if (v === "prod" || v === "test") return v;
-    return defaultEnv();
-  })();
+  const searchParams = useSearchParams();            // may be null on server, but we're in client
+  const qp = searchParams?.get('env');               // 'test' | 'prod' | null
+
+  const defaultEnv = (): EnvKey =>
+    (process.env.NEXT_PUBLIC_DEFAULT_ENV?.toLowerCase() === 'prod' ? 'prod' : 'test');
+
+  const initialEnv: EnvKey =
+    qp === 'prod' || qp === 'test' ? (qp as EnvKey) : defaultEnv();
+
   const [env, setEnv] = useState<EnvKey>(initialEnv);
   const [gasUrl, setGasUrl] = useState<string | undefined>(undefined);
   const [pages, setPages] = useState({ manufactured: 1, stock: 1, shipped: 1 });
@@ -299,9 +303,9 @@ export default function UnifiedKanbanPrototypeV2() {
   const prodConfirmed = useRef(false);
 
   useEffect(() => {
-    const current = searchParams.get("env");
+    const current = searchParams?.get("env");
     if (current !== env) {
-      const sp = new URLSearchParams(searchParams.toString());
+      const sp = new URLSearchParams(searchParams ? searchParams.toString() : "");
       sp.set("env", env);
       router.replace(`?${sp.toString()}`, { scroll: false });
     }
@@ -1542,9 +1546,17 @@ function makeId(item: PackingItem) {
           </SimpleDialog>
         )}
       </div>
-    </div>
+      </div>
   );
 };
+
+export default function UnifiedKanbanPrototypeV2() {
+  return (
+    <Suspense fallback={null}>
+      <UnifiedKanbanImpl />
+    </Suspense>
+  );
+}
 
 // ===== Kanban Column =====
 function KanbanColumn({
