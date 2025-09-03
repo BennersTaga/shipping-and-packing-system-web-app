@@ -52,9 +52,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (apiKey) headers["X-Api-Key"] = apiKey;
 
     const { action, ...rest } = parsed.data;
-    const body = JSON.stringify({ ...rest, requestId: reqId });
+    const body = JSON.stringify({ action, ...rest, requestId: reqId });
     const origin = originFromReq(req);
-    const url = `${origin}/api/gas/${action}`;
+    const urlObj = new URL(`${origin}/api/gas/post`);
+    const env = (req.query.env as string) || undefined;
+    if (env) urlObj.searchParams.set("env", env);
+    const url = urlObj.toString();
 
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
