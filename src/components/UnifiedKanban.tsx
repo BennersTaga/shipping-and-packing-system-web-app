@@ -1,6 +1,10 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import EnvBadge from "./EnvBadge";
+
+type EnvKey = 'test' | 'prod';
 // Unified Kanban UI – 梱包/出荷/在庫 の表側プロトタイプ
 // v2.20
 // - カード情報を縦並びにレイアウト（長い文字列でも途中で切れにくい）
@@ -45,6 +49,8 @@ type Meta = {
     shipped: PaginationMeta;
   };
   backlog?: { count: number; items?: PackingItem[] };
+  env?: { key: EnvKey; label: string };
+  gasUrl?: string;
 };
 
 type ShipType = "ロジカム出荷" | "羽野出荷";
@@ -222,7 +228,7 @@ function buildMockData(date: string): PackingItem[] {
 }
 
 // ===== メイン =====
-export default function UnifiedKanbanPrototypeV2() {
+function UnifiedKanbanImpl() {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const inflightRef = useRef<Set<string>>(new Set()); // 多重送信ガード
   const searchRef = useRef<{ id: number; controller: AbortController | null }>({
@@ -270,6 +276,18 @@ export default function UnifiedKanbanPrototypeV2() {
   const [restoreTarget, setRestoreTarget] = useState<PackingItem | null>(null);
   const [highlightId, setHighlightId] = useState<string | null>(null);
 
+  const router = useRouter();
+  const searchParams = useSearchParams();            // may be null on server, but we're in client
+  const qp = searchParams?.get('env');               // 'test' | 'prod' | null
+
+  const defaultEnv = (): EnvKey =>
+    (process.env.NEXT_PUBLIC_DEFAULT_ENV?.toLowerCase() === 'prod' ? 'prod' : 'test');
+
+  const initialEnv: EnvKey =
+    qp === 'prod' || qp === 'test' ? (qp as EnvKey) : defaultEnv();
+
+  const [env, setEnv] = useState<EnvKey>(initialEnv);
+  const [gasUrl, setGasUrl] = useState<string | undefined>(undefined);
   const [pages, setPages] = useState({ manufactured: 1, stock: 1, shipped: 1 });
   const [meta, setMeta] = useState<Meta | null>(null);
 
@@ -282,6 +300,16 @@ export default function UnifiedKanbanPrototypeV2() {
     totalPages: 1,
   });
   const [backlogLoading, setBacklogLoading] = useState(false);
+  const prodConfirmed = useRef(false);
+
+  useEffect(() => {
+    const current = searchParams?.get("env");
+    if (current !== env) {
+      const sp = new URLSearchParams(searchParams ? searchParams.toString() : "");
+      sp.set("env", env);
+      router.replace(`?${sp.toString()}`, { scroll: false });
+    }
+  }, [env, router, searchParams]);
 
   // ==== データ取得 ====
   async function fetchData(
@@ -307,6 +335,7 @@ export default function UnifiedKanbanPrototypeV2() {
       };
 
       const params = new URLSearchParams();
+      params.append("env", env);
       if (f.date) {
         params.append("date", f.date);
         params.append("includeBacklog", "1");
@@ -415,6 +444,10 @@ export default function UnifiedKanbanPrototypeV2() {
       setCards(nextCards);
       setColumns(col);
       setMeta(metaInfo);
+      if (metaInfo?.env?.key && (metaInfo.env.key === "prod" || metaInfo.env.key === "test")) {
+        if (metaInfo.env.key !== env) setEnv(metaInfo.env.key);
+      }
+      if (metaInfo?.gasUrl) setGasUrl(metaInfo.gasUrl);
     } catch (e: any) {
       if (myId === searchRef.current.id)
         setError(e.message || "読み込みエラー");
@@ -428,6 +461,7 @@ export default function UnifiedKanbanPrototypeV2() {
     setBacklogLoading(true);
     try {
       const params = new URLSearchParams();
+      params.append("env", env);
       params.append("scope", "backlog");
       params.append("excludeDate", filters.date);
       params.append("paginate", "1");
@@ -462,6 +496,7 @@ export default function UnifiedKanbanPrototypeV2() {
     setArchiveLoading(true);
     try {
       const search = new URLSearchParams();
+      search.append("env", env);
       search.append("scope", "archive");
       if (params.year) search.append("year", String(params.year));
       if (params.month) search.append("month", String(params.month));
@@ -515,8 +550,8 @@ export default function UnifiedKanbanPrototypeV2() {
   }
 
   useEffect(() => {
-    fetchData({ date: today });
-  }, [today]); // eslint-disable-line react-hooks/exhaustive-deps
+    fetchData({ date: today }, { manufactured: 1, stock: 1, shipped: 1 });
+  }, [today, env]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ==== DnD 設定 ====
   const sensors = useSensors(
@@ -889,11 +924,28 @@ export default function UnifiedKanbanPrototypeV2() {
     };
     requestId: string;
   }) {
-    const res = await fetchWithRetry(API_ENDPOINTS.UPDATE_PACKING, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    if (
+      env === "prod" &&
+      typeof window !== "undefined" &&
+      !prodConfirmed.current
+    ) {
+      if (localStorage.getItem("skipProdConfirm") !== "1") {
+        const ok = window.confirm("本番に書き込みます。よろしいですか？");
+        if (!ok) throw new Error("cancelled");
+        if (window.confirm("次回から表示しない")) {
+          localStorage.setItem("skipProdConfirm", "1");
+        }
+      }
+      prodConfirmed.current = true;
+    }
+    const res = await fetchWithRetry(
+      `${API_ENDPOINTS.UPDATE_PACKING}?env=${env}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      },
+    );
     const j = await res.json().catch(() => null);
     if (!j?.success) {
       throw new Error(j?.error || res.statusText);
@@ -1100,12 +1152,20 @@ function makeId(item: PackingItem) {
               <span className="text-5xl">📦</span>
               {headerTitle}
             </h1>
+            <div className="flex items-center gap-3">
+              <EnvBadge
+                env={env}
+                label={meta?.env?.label || (env === "prod" ? "本番" : "テスト")}
+                baseUrl={gasUrl}
+                onToggle={() => setEnv(env === "prod" ? "test" : "prod")}
+              />
               <button
                 onClick={openArchiveModal}
                 className="hidden md:inline-flex px-4 py-2 rounded-full border-2 border-purple-600 text-purple-700 hover:bg-purple-50"
               >
                 アーカイブ
               </button>
+            </div>
           </div>
 
           {/* フィルター */}
@@ -1319,7 +1379,7 @@ function makeId(item: PackingItem) {
                 onChange={(p) => fetchBacklog(p)}
               />
             }
-            bodyClassName="max-h-[80vh] min-h-[40vh] overflow-y-auto"
+            bodyClassName="max-h-[36rem] overflow-y-auto"
           >
             {backlogLoading ? (
               <Loading />
@@ -1486,9 +1546,17 @@ function makeId(item: PackingItem) {
           </SimpleDialog>
         )}
       </div>
-    </div>
+      </div>
   );
 };
+
+export default function UnifiedKanbanPrototypeV2() {
+  return (
+    <Suspense fallback={null}>
+      <UnifiedKanbanImpl />
+    </Suspense>
+  );
+}
 
 // ===== Kanban Column =====
 function KanbanColumn({
@@ -1666,10 +1734,10 @@ function KanbanCard({
                 <span
                   className={
                     item.shipType === "羽野出荷"
-                      ? "text-sky-500"
+                      ? "text-sky-600"
                       : item.shipType === "ロジカム出荷"
-                        ? "text-pink-500"
-                        : ""
+                        ? "text-pink-600"
+                        : "text-gray-600"
                   }
                 >
                   {item.shipType || "-"}
@@ -1739,7 +1807,7 @@ function Loading() {
   return (
     <div className="py-10 flex items-center justify-center text-gray-600">
       <div className="h-5 w-5 mr-2 border-2 border-gray-300 border-t-transparent rounded-full animate-spin" />
-      読み込み中…
+      データ読み込み中…
     </div>
   );
 }
