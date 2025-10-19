@@ -2,6 +2,13 @@
 
 import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { API_ENDPOINTS, fetchWithRetry } from "@/features/packing/api";
+import {
+  clearPendingRequestId,
+  getOrCreatePendingRequestId,
+  PackingAction,
+} from "@/features/packing/idempotency";
+import { fetchArchive as fetchArchiveApi } from "@/features/packing/archive";
 import EnvBadge from "./EnvBadge";
 
 type EnvKey = 'test' | 'prod';
@@ -56,13 +63,6 @@ type Meta = {
 type ShipType = "ロジカム出荷" | "羽野出荷";
 
 // ===== API config / helpers =====
-const API_ENDPOINTS = {
-  SEARCH_PACKING: "/api/packing/search",
-  UPDATE_PACKING: "/api/packing/update",
-};
-
-type Action = "pack" | "ship" | "move" | "restore";
-
 const toast = (msg: string) => {
   if (typeof window !== "undefined") alert(msg);
   console.error(msg);
@@ -70,6 +70,9 @@ const toast = (msg: string) => {
 
 const NETWORK_ERROR_MESSAGE =
   "通信エラーが発生しました。ネットワーク状況を確認し、ページを再読み込みしてください。";
+
+const SLOW_NETWORK_MESSAGE = "通信が遅い場合、1分以上かかることがあります";
+const DEDUP_NOTICE_MESSAGE = "重複送信を検知して1回分に抑止しました";
 
 const STORAGE_OPTIONS = [
   "パレット①",
@@ -495,20 +498,7 @@ function UnifiedKanbanImpl() {
   }) {
     setArchiveLoading(true);
     try {
-      const search = new URLSearchParams();
-      search.append("env", env);
-      search.append("scope", "archive");
-      if (params.year) search.append("year", String(params.year));
-      if (params.month) search.append("month", String(params.month));
-      if (params.day) search.append("day", String(params.day));
-      search.append("paginate", "1");
-      search.append("pageSize", "10");
-      search.append("pageShipped", String(params.page || 1));
-      const res = await fetch(`/api/gas/search?${search.toString()}`, {
-        cache: "no-store",
-      });
-      if (!res.ok) throw new Error(res.statusText);
-      const j = await res.json();
+      const j = await fetchArchiveApi({ env, ...params });
       setArchiveYears(j.meta?.archive?.years || []);
       setArchiveMonths(j.meta?.archive?.months || []);
       setArchiveDays(j.meta?.archive?.days || []);
@@ -587,7 +577,7 @@ function UnifiedKanbanImpl() {
         mode: "ship",
         item,
         origin: from,
-        onSubmit: (p) => doShip(item, p as any),
+        onSubmit: (p) => doShip(item, p as any, from),
       });
     }
   }
@@ -636,7 +626,7 @@ function UnifiedKanbanImpl() {
       mode: "ship",
       item,
       origin,
-      onSubmit: (p) => doShip(item, p as any),
+      onSubmit: (p) => doShip(item, p as any, origin),
     });
   }
   function requestMove(item: PackingItem) {
@@ -654,10 +644,11 @@ function UnifiedKanbanImpl() {
         );
         const { remain, move } = computeSplit(cur, p.quantity || cur);
         const movedQty = Math.max(1, Math.min(p.quantity || cur, cur));
-        const rid = genRequestId();
+        const action: PackingAction = "move";
+        const requestId = getOrCreatePendingRequestId(item.rowIndex, action);
         try {
           const from = normalizeLocation(item.packingInfo.location || "");
-          await updatePacking({
+          const result = await updatePacking({
             action: "move",
             rowIndex: item.rowIndex,
             packingData: {
@@ -673,8 +664,12 @@ function UnifiedKanbanImpl() {
               fromLocation: from.label,
               toLocation: to.label,
             },
-            requestId: rid,
+            requestId,
           });
+          clearPendingRequestId(item.rowIndex, action);
+          if (result.dedup) {
+            toast(DEDUP_NOTICE_MESSAGE);
+          }
           if (move === cur) {
             const { beforeId, afterId, updated } = computeAfterMove(
               item,
@@ -718,7 +713,10 @@ function UnifiedKanbanImpl() {
           closeDialog();
         } catch (err) {
           const msg = (err as Error).message;
-          if (msg !== NETWORK_ERROR_MESSAGE) toast(msg);
+          if (msg !== NETWORK_ERROR_MESSAGE) {
+            toast(msg);
+            clearPendingRequestId(item.rowIndex, action);
+          }
         }
       },
     });
@@ -744,9 +742,10 @@ function UnifiedKanbanImpl() {
       shipped: prev.shipped.filter((id) => id !== before),
       stock: prev.stock.includes(after) ? prev.stock : [...prev.stock, after],
     }));
+    const action: PackingAction = "restore";
+    const requestId = getOrCreatePendingRequestId(item.rowIndex, action);
     try {
-      const rid = genRequestId();
-      await updatePacking({
+      const result = await updatePacking({
         action: "restore",
         rowIndex: item.rowIndex,
         packingData: { quantity: q, location: loc.label, to: loc.label },
@@ -757,11 +756,18 @@ function UnifiedKanbanImpl() {
           fromLocation: "",
           toLocation: loc.label,
         },
-        requestId: rid,
+        requestId,
       });
+      clearPendingRequestId(item.rowIndex, action);
+      if (result.dedup) {
+        toast(DEDUP_NOTICE_MESSAGE);
+      }
     } catch (err) {
       const msg = (err as Error).message;
-      if (msg !== NETWORK_ERROR_MESSAGE) toast(msg);
+      if (msg !== NETWORK_ERROR_MESSAGE) {
+        toast(msg);
+        clearPendingRequestId(item.rowIndex, action);
+      }
     }
   }
 
@@ -777,7 +783,8 @@ function UnifiedKanbanImpl() {
     const loc = normalizeLocation(payload.location || "");
     if (!loc.label) return;
     const qty = Math.max(1, Math.min(a.quantity, payload.quantity || a.quantity));
-    const rid = genRequestId();
+    const action: PackingAction = "restore";
+    const requestId = getOrCreatePendingRequestId(a.rowIndex, action);
 
     // 後処理（モーダルを閉じ、対象カードへスクロール＆一時ハイライト）
     const finish = (targetId: string) => {
@@ -828,7 +835,7 @@ function UnifiedKanbanImpl() {
         ),
       }));
       try {
-        await updatePacking({
+        const result = await updatePacking({
           action: "restore",
           rowIndex: a.rowIndex,
           packingData: { quantity: qty, location: loc.label, to: loc.label },
@@ -839,11 +846,18 @@ function UnifiedKanbanImpl() {
             fromLocation: "",
             toLocation: loc.label,
           },
-          requestId: rid,
+          requestId,
         });
+        clearPendingRequestId(a.rowIndex, action);
+        if (result.dedup) {
+          toast(DEDUP_NOTICE_MESSAGE);
+        }
       } catch (err) {
         const msg = (err as Error).message;
-        if (msg !== NETWORK_ERROR_MESSAGE) toast(msg);
+        if (msg !== NETWORK_ERROR_MESSAGE) {
+          toast(msg);
+          clearPendingRequestId(a.rowIndex, action);
+        }
       }
       finish(existingId);
       return;
@@ -863,7 +877,7 @@ function UnifiedKanbanImpl() {
       return { ...prev, shipped: shippedIds, stock: nextStock };
     });
     try {
-      await updatePacking({
+      const result = await updatePacking({
         action: "restore",
         rowIndex: a.rowIndex,
         packingData: { quantity: qty, location: loc.label, to: loc.label },
@@ -874,45 +888,26 @@ function UnifiedKanbanImpl() {
           fromLocation: "",
           toLocation: loc.label,
         },
-        requestId: rid,
+        requestId,
       });
+      clearPendingRequestId(a.rowIndex, action);
+      if (result.dedup) {
+        toast(DEDUP_NOTICE_MESSAGE);
+      }
     } catch (err) {
       const msg = (err as Error).message;
-      if (msg !== NETWORK_ERROR_MESSAGE) toast(msg);
+      if (msg !== NETWORK_ERROR_MESSAGE) {
+        toast(msg);
+        clearPendingRequestId(a.rowIndex, action);
+      }
     }
     finish(newId);
   }
 
   // ==== 操作実装 ====
 
-  async function fetchWithRetry(
-    url: string,
-    options: RequestInit = {},
-  ): Promise<Response> {
-    const delays = [300, 600, 1200];
-    for (let i = 0; i < 3; i++) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 10000);
-      try {
-        const res = await fetch(url, { ...options, signal: controller.signal });
-        clearTimeout(timer);
-        if (!res.ok) throw new Error(res.statusText);
-        return res;
-      } catch (e) {
-        clearTimeout(timer);
-        if (i < 2) {
-          await new Promise((r) => setTimeout(r, delays[i]));
-        } else {
-          alert(NETWORK_ERROR_MESSAGE);
-          throw new Error(NETWORK_ERROR_MESSAGE);
-        }
-      }
-    }
-    throw new Error(NETWORK_ERROR_MESSAGE);
-  }
-
   async function updatePacking(payload: {
-    action: Action;
+    action: PackingAction;
     rowIndex: number;
     packingData: Record<string, any>;
     log: {
@@ -923,7 +918,7 @@ function UnifiedKanbanImpl() {
       toLocation?: string;
     };
     requestId: string;
-  }) {
+  }): Promise<{ dedup: boolean; body: any }> {
     if (
       env === "prod" &&
       typeof window !== "undefined" &&
@@ -946,10 +941,19 @@ function UnifiedKanbanImpl() {
         body: JSON.stringify(payload),
       },
     );
-    const j = await res.json().catch(() => null);
-    if (!j?.success) {
-      throw new Error(j?.error || res.statusText);
+    type UpdateResponse = {
+      success?: boolean;
+      dedup?: boolean;
+      error?: string;
+    };
+    const body = (await res.json().catch(() => null)) as UpdateResponse | null;
+    const dedup = Boolean(body?.dedup);
+    const success =
+      typeof body?.success === "boolean" ? body.success : res.ok || dedup;
+    if (!dedup && !success) {
+      throw new Error(body?.error || res.statusText || "Request failed");
     }
+    return { dedup, body };
   }
 
   async function doPack(
@@ -959,10 +963,11 @@ function UnifiedKanbanImpl() {
     const key = `${item.rowIndex}:pack`;
     if (inflightRef.current.has(key)) return;
     inflightRef.current.add(key);
-    const rid = genRequestId();
+    const action: PackingAction = "pack";
+    const requestId = getOrCreatePendingRequestId(item.rowIndex, action);
     try {
       const loc = normalizeLocation(payload.location || "");
-      await updatePacking({
+      const result = await updatePacking({
         action: "pack",
         rowIndex: item.rowIndex,
         packingData: {
@@ -976,13 +981,20 @@ function UnifiedKanbanImpl() {
           fromLocation: "",
           toLocation: loc.label,
         },
-        requestId: rid,
+        requestId,
       });
+      clearPendingRequestId(item.rowIndex, action);
+      if (result.dedup) {
+        toast(DEDUP_NOTICE_MESSAGE);
+      }
       await fetchData();
       closeDialog();
     } catch (err) {
       const msg = (err as Error).message;
-      if (msg !== NETWORK_ERROR_MESSAGE) toast(msg);
+      if (msg !== NETWORK_ERROR_MESSAGE) {
+        toast(msg);
+        clearPendingRequestId(item.rowIndex, action);
+      }
     } finally {
       inflightRef.current.delete(key);
     }
@@ -991,16 +1003,19 @@ function UnifiedKanbanImpl() {
   async function doShip(
     item: PackingItem,
     payload: { location?: string; quantity?: number; shipType?: ShipType },
+    origin?: KanbanStatusId,
   ) {
     const key = `${item.rowIndex}:ship`;
     if (inflightRef.current.has(key)) return;
     inflightRef.current.add(key);
-    const rid = genRequestId();
+    const action: PackingAction =
+      origin === "manufactured" ? "ship_from_manu" : "ship";
+    const requestId = getOrCreatePendingRequestId(item.rowIndex, action);
     try {
       const to = normalizeLocation(payload.location || "");
       const from = normalizeLocation(item.packingInfo.location || "");
-      await updatePacking({
-        action: "ship",
+      const result = await updatePacking({
+        action,
         rowIndex: item.rowIndex,
         packingData: {
           quantity: payload.quantity || 1,
@@ -1015,27 +1030,26 @@ function UnifiedKanbanImpl() {
           fromLocation: from.label,
           toLocation: to.label,
         },
-        requestId: rid,
+        requestId,
       });
+      clearPendingRequestId(item.rowIndex, action);
+      if (result.dedup) {
+        toast(DEDUP_NOTICE_MESSAGE);
+      }
       await fetchData();
       closeDialog();
     } catch (err) {
       const msg = (err as Error).message;
-      if (msg !== NETWORK_ERROR_MESSAGE) toast(msg);
+      if (msg !== NETWORK_ERROR_MESSAGE) {
+        toast(msg);
+        clearPendingRequestId(item.rowIndex, action);
+      }
     } finally {
       inflightRef.current.delete(key);
     }
   }
 
   // ==== ユーティリティ ====
-  function genRequestId() {
-    try {
-      const v = (globalThis as any)?.crypto?.randomUUID?.();
-      return v || Math.random().toString(36).slice(2);
-    } catch {
-      return Math.random().toString(36).slice(2);
-    }
-  }
   function moveCardEx(
     oldId: string,
     from: KanbanStatusId,
@@ -1884,6 +1898,24 @@ function ActionForm({
   const [quantity, setQuantity] = useState(1);
   const [shipType, setShipType] = useState<ShipType>("ロジカム出荷");
   const [submitting, setSubmitting] = useState(false);
+  const lockTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (lockTimerRef.current) {
+        clearTimeout(lockTimerRef.current);
+        lockTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const releaseLock = () => {
+    if (lockTimerRef.current) {
+      clearTimeout(lockTimerRef.current);
+      lockTimerRef.current = null;
+    }
+    setSubmitting(false);
+  };
 
   return (
     <form
@@ -1894,13 +1926,18 @@ function ActionForm({
         if (showQuantity && quantity <= 0) return;
         try {
           setSubmitting(true);
+          toast(SLOW_NETWORK_MESSAGE);
+          lockTimerRef.current = setTimeout(() => {
+            lockTimerRef.current = null;
+            setSubmitting(false);
+          }, 60_000);
           await onSubmit({
             location: showLocation ? location : undefined,
             quantity: showQuantity ? quantity : undefined,
             shipType,
           });
         } finally {
-          setSubmitting(false);
+          releaseLock();
         }
       }}
       className="space-y-4"
