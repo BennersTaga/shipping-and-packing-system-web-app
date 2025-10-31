@@ -4,7 +4,7 @@ import { z } from "zod";
 import { generateRequestId } from "../../../utils/requestId";
 
 const updateSchema = z.object({
-  action: z.enum(["pack", "ship", "move", "restore"]),
+  action: z.enum(["pack", "ship", "move", "restore", "ship_from_manu"]),
   rowIndex: z.number(),
   packingData: z.record(z.any()).optional(),
   payload: z.record(z.any()).optional(),
